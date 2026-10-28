@@ -1,7 +1,7 @@
 [workspace]
 resolver = "3"
-members = ["crates/halfspeed-dsp", "crates/halfspeedbtw", "xtask"]
-default-members = ["crates/halfspeed-dsp", "crates/halfspeedbtw"]
+members = ["crates/btw-ui", "crates/halfspeed-dsp", "crates/halfspeedbtw", "xtask"]
+default-members = ["crates/btw-ui", "crates/halfspeed-dsp", "crates/halfspeedbtw"]
 
 [workspace.package]
 version = "0.1.0"

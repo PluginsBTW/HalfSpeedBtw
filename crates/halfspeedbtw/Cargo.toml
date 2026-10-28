@@ -24,6 +24,7 @@ name = "halfspeedbtw"
 required-features = ["standalone"]
 
 [dependencies]
+btw-ui = { path = "../btw-ui" }
 halfspeed-dsp = { path = "../halfspeed-dsp" }
 # `assert_process_allocs` aborts debug builds that allocate inside `process()`.
 nice-plug = { version = "0.4.2", features = ["assert_process_allocs"] }

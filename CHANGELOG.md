@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- **Editor:** captions, unselected labels and the status line use a lighter
+  dim text (`#8a95a9`), which keeps 4.5:1 contrast on every surface. The
+  layout is unchanged.
+- **Development:** the look and the controls moved into a reusable crate,
+  `btw-ui`, so other PluginsBTW plugins can share them.
+
 ## 0.1.0
 
 The first release of HalfSpeedBtw, a tempo-synced half-speed loop effect for

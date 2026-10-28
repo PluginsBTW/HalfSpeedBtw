@@ -203,12 +203,13 @@ and time signature.
 
 ## Development
 
-The workspace has three crates:
+The workspace has four crates:
 
 | Path | What it is |
 | --- | --- |
+| `crates/btw-ui` | The PluginsBTW UI design system for egui editors: palette, type sizes and every control. Other plugins can use it as a git dependency; see its [README](crates/btw-ui/README.md). |
 | `crates/halfspeed-dsp` | The DSP engine: loop clock, playback, crossfades, fades, band filters. It has no dependencies and doesn't depend on any plugin API. |
-| `crates/halfspeedbtw` | The plugin: parameters, editor, CLAP/VST3 export and the optional standalone app. |
+| `crates/halfspeedbtw` | The plugin: parameters, the editor layout, CLAP/VST3 export and the optional standalone app. |
 | `xtask` | `cargo xtask bundle`, which builds the `.clap` and `.vst3` bundles. |
 
 Run the tests and lints:

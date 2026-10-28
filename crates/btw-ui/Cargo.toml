@@ -1,0 +1,17 @@
+[package]
+name = "btw-ui"
+description = "The PluginsBTW UI design system for nice-plug egui editors: palette, type sizes and widgets"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+# Only the parameter and editor types; the plugin picks its own formats and renderer.
+nice-plug = { version = "0.4.2", default-features = false, features = ["editor"] }
+egui = { version = "0.37.0", default-features = false }

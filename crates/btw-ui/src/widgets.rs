@@ -1,0 +1,507 @@
+//! The PluginsBTW controls, drawn with egui's painter at absolute positions.
+//!
+//! Each control that changes a parameter reports it to the host as one gesture: begin, set
+//! and end for a click, or begin on drag start, set on each move and end on drag stop.
+
+use std::f32::consts::{PI, TAU};
+
+use egui::{
+    Align2, Color32, CursorIcon, FontId, Painter, Pos2, Rect, Response, Sense, Shape, Stroke,
+    StrokeKind, Ui, Vec2, pos2, vec2,
+};
+use nice_plug::prelude::{BoolParam, Enum, EnumParam, FloatParam, Param, ParamSetter};
+
+use crate::geometry::{KNOB_START, KNOB_SWEEP, LogScale, arc_points, lerp_color};
+use crate::palette::{self, *};
+use crate::type_scale;
+
+/// Window edge to panel edge.
+pub const INSET_PANEL: f32 = 12.0;
+/// Panel edge to content.
+pub const PAD_CONTENT: f32 = 20.0;
+/// Normalized change per pixel of knob drag; Shift drags ten times finer.
+pub const DRAG_SPEED: f32 = 0.005;
+
+/// Sets a parameter as a single host-visible gesture.
+pub fn set_param<P: Param>(setter: &ParamSetter, param: &P, value: P::Plain) {
+    setter.begin_set_parameter(param);
+    setter.set_parameter(param, value);
+    setter.end_set_parameter(param);
+}
+
+fn reset_param<P: Param>(setter: &ParamSetter, param: &P) {
+    setter.begin_set_parameter(param);
+    setter.set_parameter_normalized(param, param.default_normalized_value());
+    setter.end_set_parameter(param);
+}
+
+/// Paints the window ground and the one panel on it, and returns the panel's rectangle.
+pub fn panel(ui: &Ui) -> Rect {
+    let window = ui.max_rect();
+    let panel = window.shrink(INSET_PANEL);
+    let painter = ui.painter();
+    painter.rect_filled(window, 0, BACKGROUND);
+    painter.rect_filled(panel, 14, SURFACE);
+    painter.rect_stroke(panel, 14, Stroke::new(1.0, EDGE), StrokeKind::Inside);
+    panel
+}
+
+/// An uppercase control name, centered on `center`.
+pub fn caption(painter: &Painter, center: Pos2, text: &str) {
+    painter.text(
+        center,
+        Align2::CENTER_CENTER,
+        text,
+        FontId::proportional(type_scale::CAPTION),
+        TEXT_DIM,
+    );
+}
+
+/// A status line in the header, right-aligned to `right_center`.
+pub fn status(painter: &Painter, right_center: Pos2, text: &str) {
+    painter.text(
+        right_center,
+        Align2::RIGHT_CENTER,
+        text,
+        FontId::proportional(type_scale::CAPTION),
+        TEXT_DIM,
+    );
+}
+
+/// The clock mark and the product name: `first` in text, `second` in accent, then `Btw` in
+/// dim text. Pass an empty `second` for one-word names.
+pub fn wordmark(painter: &Painter, mark_center: Pos2, first: &str, second: &str) {
+    // A slowed-down clock: a ring with one long, lazy hand.
+    painter.circle_stroke(mark_center, 11.0, Stroke::new(2.5, ACCENT));
+    let hand = Stroke::new(2.5, GLOW);
+    painter.line_segment([mark_center, mark_center + vec2(0.0, -7.0)], hand);
+    painter.line_segment([mark_center, mark_center + vec2(5.0, 3.0)], hand);
+
+    let font = FontId::proportional(type_scale::WORDMARK);
+    let mut x = mark_center.x + 20.0;
+    for (word, color) in [(first, TEXT), (second, ACCENT), ("Btw", TEXT_DIM)] {
+        let rect = painter.text(
+            pos2(x, mark_center.y),
+            Align2::LEFT_CENTER,
+            word,
+            font.clone(),
+            color,
+        );
+        x = rect.right();
+    }
+}
+
+/// A rounded on/off pill reading `<stem> ON` or `<stem> OFF`, with a tooltip saying what
+/// "on" does. The design size is 92 x 26.
+pub fn toggle_pill(
+    ui: &Ui,
+    setter: &ParamSetter,
+    rect: Rect,
+    param: &BoolParam,
+    stem: &str,
+    tooltip: &str,
+) {
+    let on = param.value();
+    let response = ui
+        .interact(rect, ui.scope_id().with(stem), Sense::click())
+        .on_hover_cursor(CursorIcon::PointingHand)
+        .on_hover_text(tooltip);
+    if response.clicked() {
+        set_param(setter, param, !on);
+    }
+
+    let (fill, stroke, text) = if on {
+        (palette::accent_halo(), ACCENT, GLOW)
+    } else {
+        (RAISED, EDGE, TEXT_DIM)
+    };
+    let radius = (rect.height() / 2.0) as u8;
+    let painter = ui.painter();
+    painter.rect_filled(rect, radius, fill);
+    painter.rect_stroke(rect, radius, Stroke::new(1.0, stroke), StrokeKind::Inside);
+    painter.text(
+        rect.center(),
+        Align2::CENTER_CENTER,
+        format!("{stem} {}", if on { "ON" } else { "OFF" }),
+        FontId::proportional(type_scale::CAPTION),
+        text,
+    );
+}
+
+/// A row of equally sized buttons, one per enum variant, filling `rect`. Use 34px height
+/// for a full-width row and 32px for a compact one; put a caption 14px below.
+pub fn segmented<T: Enum + PartialEq + 'static>(
+    ui: &Ui,
+    setter: &ParamSetter,
+    id_salt: &str,
+    rect: Rect,
+    param: &EnumParam<T>,
+) {
+    let names = T::variants();
+    let gap = 6.0;
+    let width = (rect.width() - gap * (names.len() - 1) as f32) / names.len() as f32;
+    let current = param.value().to_index();
+    let painter = ui.painter();
+
+    for (index, name) in names.iter().enumerate() {
+        let button = Rect::from_min_size(
+            rect.min + vec2(index as f32 * (width + gap), 0.0),
+            vec2(width, rect.height()),
+        );
+        let response = ui
+            .interact(
+                button,
+                ui.scope_id().with(id_salt).with(index),
+                Sense::click(),
+            )
+            .on_hover_cursor(CursorIcon::PointingHand);
+        let selected = index == current;
+        if response.clicked() && !selected {
+            set_param(setter, param, T::from_index(index));
+        }
+
+        if selected {
+            painter.rect_filled(button.expand(3.0), 10, palette::accent_halo_strong());
+            painter.rect_filled(button, 7, ACCENT);
+        } else {
+            let fill = if response.hovered() {
+                RAISED_HOVER
+            } else {
+                RAISED
+            };
+            painter.rect_filled(button, 7, fill);
+            painter.rect_stroke(button, 7, Stroke::new(1.0, EDGE), StrokeKind::Inside);
+        }
+        let text = match (selected, response.hovered()) {
+            (true, _) => BACKGROUND,
+            (false, true) => TEXT,
+            (false, false) => TEXT_DIM,
+        };
+        painter.text(
+            button.center(),
+            Align2::CENTER_CENTER,
+            *name,
+            FontId::proportional(type_scale::CONTROL_LABEL),
+            text,
+        );
+    }
+}
+
+/// Knob sizes, by arc radius.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KnobSize {
+    /// 38px: the primary pair of controls.
+    Large,
+    /// 32px: secondary controls.
+    Small,
+}
+
+impl KnobSize {
+    pub fn radius(self) -> f32 {
+        match self {
+            Self::Large => 38.0,
+            Self::Small => 32.0,
+        }
+    }
+
+    fn value_font(self) -> f32 {
+        match self {
+            Self::Large => type_scale::VALUE_LARGE,
+            Self::Small => type_scale::VALUE,
+        }
+    }
+}
+
+/// A ring knob showing its value in the middle and `label` as a caption below. Drag up or
+/// right to increase (Shift for fine control), double-click to reset.
+pub fn knob<P: Param>(
+    ui: &Ui,
+    setter: &ParamSetter,
+    center: Pos2,
+    size: KnobSize,
+    param: &P,
+    label: &str,
+) {
+    let radius = size.radius();
+    let id = ui.scope_id().with(label);
+    let rect = Rect::from_center_size(center, Vec2::splat(2.0 * radius + 8.0));
+    let response = ui
+        .interact(rect, id, Sense::click_and_drag())
+        .on_hover_cursor(CursorIcon::ResizeVertical);
+
+    // Stepped parameters snap on every set, so accumulate the drag separately.
+    if response.drag_started() {
+        setter.begin_set_parameter(param);
+        let start = param.unmodulated_normalized_value();
+        ui.data_mut(|data| data.insert_temp(id, start));
+    }
+    if response.dragged() {
+        let fine = ui.input(|input| input.modifiers.shift);
+        let speed = if fine { DRAG_SPEED / 10.0 } else { DRAG_SPEED };
+        let delta = response.drag_delta();
+        let value = ui.data_mut(|data| {
+            let value = data.get_temp_mut_or(id, param.unmodulated_normalized_value());
+            *value = (*value + (delta.x - delta.y) * speed).clamp(0.0, 1.0);
+            *value
+        });
+        setter.set_parameter_normalized(param, value);
+    }
+    if response.drag_stopped() {
+        setter.end_set_parameter(param);
+    }
+    if response.double_clicked() {
+        reset_param(setter, param);
+    }
+
+    let value = param.unmodulated_normalized_value();
+    let painter = ui.painter();
+    painter.add(Shape::line(
+        arc_points(center, radius, KNOB_START, KNOB_SWEEP, 48),
+        Stroke::new(5.0, RAISED_HOVER),
+    ));
+    if value > 0.0 {
+        let arc = arc_points(center, radius, KNOB_START, KNOB_SWEEP * value, 48);
+        painter.add(Shape::line(
+            arc.clone(),
+            Stroke::new(9.0, palette::accent_halo()),
+        ));
+        painter.add(Shape::line(arc, Stroke::new(5.0, ACCENT)));
+    }
+    let tip = center + radius * Vec2::angled(KNOB_START + KNOB_SWEEP * value);
+    painter.circle_filled(tip, 4.0, GLOW);
+
+    let body = if response.hovered() || response.dragged() {
+        RAISED_HOVER
+    } else {
+        RAISED
+    };
+    painter.circle_filled(center, radius - 9.0, body);
+    painter.circle_stroke(center, radius - 9.0, Stroke::new(1.0, EDGE));
+    painter.text(
+        center,
+        Align2::CENTER_CENTER,
+        param.normalized_value_to_string(value, true),
+        FontId::proportional(size.value_font()),
+        TEXT,
+    );
+    caption(painter, center + vec2(0.0, radius + 16.0), label);
+}
+
+/// The display: an inset screen with a beat grid, mirrored peak bars and a playhead.
+///
+/// `levels` are peak levels in `0..=1` across one cycle (any count; HalfSpeedBtw uses 256),
+/// `phase` is the playhead position in `0..=1`. While `enabled` is false everything inside
+/// is dimmed. Draw the [`power_switch`] on top afterwards.
+pub fn display(painter: &Painter, rect: Rect, levels: &[f32], phase: f32, enabled: bool) {
+    let shade = |color: Color32| {
+        if enabled {
+            color
+        } else {
+            color.gamma_multiply(OPACITY_OFF)
+        }
+    };
+
+    painter.rect_filled(rect, 12, DISPLAY);
+    painter.rect_stroke(rect, 12, Stroke::new(1.0, EDGE), StrokeKind::Inside);
+
+    let inner = rect.shrink2(vec2(14.0, 16.0));
+    let mid_y = inner.center().y;
+    for quarter in 1..4 {
+        let x = inner.left() + inner.width() * quarter as f32 / 4.0;
+        painter.line_segment(
+            [pos2(x, inner.top()), pos2(x, inner.bottom())],
+            Stroke::new(1.0, palette::edge_faint()),
+        );
+    }
+
+    if !levels.is_empty() {
+        let bins = levels.len() as f32;
+        let bin_width = inner.width() / bins;
+        for (i, peak) in levels.iter().enumerate() {
+            // Square root lifts quiet material so the shape stays readable.
+            let level = peak.max(0.0).sqrt().min(1.0);
+            let half_height = (level * inner.height() * 0.5).max(0.5);
+            let x = inner.left() + i as f32 * bin_width;
+            let played = (i as f32 + 0.5) / bins <= phase;
+            let color = if played {
+                lerp_color(ACCENT, GLOW, level)
+            } else {
+                palette::accent_dim()
+            };
+            painter.rect_filled(
+                Rect::from_min_max(
+                    pos2(x, mid_y - half_height),
+                    pos2(x + bin_width * 0.8, mid_y + half_height),
+                ),
+                0,
+                shade(color),
+            );
+        }
+    }
+
+    let playhead_x = inner.left() + phase.clamp(0.0, 1.0) * inner.width();
+    let playhead = [
+        pos2(playhead_x, rect.top() + 6.0),
+        pos2(playhead_x, rect.bottom() - 6.0),
+    ];
+    painter.line_segment(playhead, Stroke::new(5.0, shade(palette::glow_halo())));
+    painter.line_segment(playhead, Stroke::new(1.5, shade(GLOW)));
+}
+
+/// The round on/off switch for the whole effect, usually centered on the display.
+pub fn power_switch(ui: &Ui, setter: &ParamSetter, center: Pos2, param: &BoolParam) {
+    let on = param.value();
+    let radius = 30.0;
+    let response = ui
+        .interact(
+            Rect::from_center_size(center, Vec2::splat(2.0 * radius)),
+            ui.scope_id().with("power"),
+            Sense::click(),
+        )
+        .on_hover_cursor(CursorIcon::PointingHand);
+    if response.clicked() {
+        set_param(setter, param, !on);
+    }
+
+    let ring = match (on, response.hovered()) {
+        (true, _) => GLOW,
+        (false, true) => TEXT,
+        (false, false) => TEXT_DIM,
+    };
+    let painter = ui.painter();
+    if on {
+        painter.circle_filled(center, radius + 6.0, palette::accent_halo());
+    }
+    painter.circle_filled(center, radius, palette::scrim());
+    painter.circle_stroke(center, radius, Stroke::new(2.0, ring));
+    let gap = 0.7;
+    let icon = arc_points(center, 12.0, -PI / 2.0 + gap, TAU - 2.0 * gap, 32);
+    painter.add(Shape::line(icon, Stroke::new(3.0, ring)));
+    painter.line_segment(
+        [center + vec2(0.0, -16.0), center + vec2(0.0, -4.0)],
+        Stroke::new(3.0, ring),
+    );
+}
+
+/// Labels for a [`range_slider`]: the low and high ends' names and the group caption.
+#[derive(Debug, Clone, Copy)]
+pub struct RangeLabels<'a> {
+    pub low: &'a str,
+    pub high: &'a str,
+    pub caption: &'a str,
+}
+
+/// A two-handled range slider on a logarithmic `scale`, for a low and a high bound that
+/// must stay ordered. Handles stop 1.25x apart; double-click a handle to reset it.
+pub fn range_slider(
+    ui: &Ui,
+    setter: &ParamSetter,
+    rect: Rect,
+    scale: LogScale,
+    (low, high): (&FloatParam, &FloatParam),
+    labels: RangeLabels,
+) {
+    let track_y = rect.top() + 18.0;
+    let left = rect.left() + 6.0;
+    let width = rect.width() - 12.0;
+    let x_of = |value: f32| left + scale.fraction_of(value) * width;
+    let value_at = |x: f32| scale.value_at((x - left) / width);
+
+    let low_value = low.value();
+    let high_value = high.value();
+    let painter = ui.painter();
+    let track = Rect::from_min_max(pos2(left, track_y - 3.0), pos2(left + width, track_y + 3.0));
+    painter.rect_filled(track, 3, RAISED_HOVER);
+    let active = Rect::from_min_max(
+        pos2(x_of(low_value), track.top()),
+        pos2(x_of(high_value), track.bottom()),
+    );
+    painter.rect_filled(active.expand(3.0), 6, palette::accent_halo());
+    painter.rect_filled(active, 3, ACCENT);
+
+    // Keep the handles from crossing so the range never closes completely.
+    let min_ratio = 1.25;
+    for (param, is_low) in [(low, true), (high, false)] {
+        let x = x_of(param.value());
+        let handle = Rect::from_center_size(pos2(x, track_y), vec2(10.0, 24.0));
+        let response = ui
+            .interact(
+                handle.expand(4.0),
+                ui.scope_id().with(labels.caption).with(is_low),
+                Sense::click_and_drag(),
+            )
+            .on_hover_cursor(CursorIcon::ResizeHorizontal);
+        drag_handle(setter, param, &response, |pointer_x| {
+            let value = value_at(pointer_x);
+            if is_low {
+                value.min(high_value / min_ratio)
+            } else {
+                value.max(low_value * min_ratio)
+            }
+        });
+
+        let fill = if response.hovered() || response.dragged() {
+            GLOW
+        } else {
+            TEXT
+        };
+        painter.rect_filled(handle, 3, fill);
+        painter.rect_stroke(handle, 3, Stroke::new(1.0, BACKGROUND), StrokeKind::Outside);
+    }
+
+    let small = FontId::proportional(type_scale::CAPTION);
+    let below = track_y + 22.0;
+    for (pos, align, text, color) in [
+        (
+            pos2(left, below),
+            Align2::LEFT_CENTER,
+            low.to_string(),
+            TEXT,
+        ),
+        (
+            pos2(left + width, below),
+            Align2::RIGHT_CENTER,
+            high.to_string(),
+            TEXT,
+        ),
+        (
+            pos2(left, rect.top()),
+            Align2::LEFT_CENTER,
+            labels.low.to_string(),
+            TEXT_DIM,
+        ),
+        (
+            pos2(left + width, rect.top()),
+            Align2::RIGHT_CENTER,
+            labels.high.to_string(),
+            TEXT_DIM,
+        ),
+    ] {
+        painter.text(pos, align, text, small.clone(), color);
+    }
+    caption(painter, pos2(rect.center().x, below + 18.0), labels.caption);
+}
+
+/// Handles a drag gesture on a slider handle, mapping the pointer's x position through
+/// `value_at`. Double-click resets to the default.
+fn drag_handle(
+    setter: &ParamSetter,
+    param: &FloatParam,
+    response: &Response,
+    value_at: impl Fn(f32) -> f32,
+) {
+    if response.drag_started() {
+        setter.begin_set_parameter(param);
+    }
+    if response.dragged()
+        && let Some(pointer) = response.interact_pointer_pos()
+    {
+        setter.set_parameter(param, value_at(pointer.x));
+    }
+    if response.drag_stopped() {
+        setter.end_set_parameter(param);
+    }
+    if response.double_clicked() {
+        reset_param(setter, param);
+    }
+}
