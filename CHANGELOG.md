@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.1
 
 - **Editor:** captions, unselected labels and the status line use a lighter
   dim text (`#8a95a9`), which keeps 4.5:1 contrast on every surface. The
