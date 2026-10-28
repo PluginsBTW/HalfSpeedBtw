@@ -1,0 +1,32 @@
+[workspace]
+resolver = "3"
+members = ["crates/halftime-dsp", "crates/halftime", "xtask"]
+default-members = ["crates/halftime-dsp", "crates/halftime"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+authors = ["Roman Hofmann"]
+license = "GPL-3.0-or-later"
+publish = false
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+
+# A small amount of optimization keeps debug builds usable in a DAW.
+[profile.dev]
+opt-level = 1
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
+strip = "symbols"
+
+[profile.profiling]
+inherits = "release"
+debug = true
+strip = "none"

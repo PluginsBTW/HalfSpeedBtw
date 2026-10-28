@@ -1,0 +1,3 @@
+[alias]
+# Bundles CLAP and VST3 plugins into target/bundled/, e.g. `cargo xtask bundle halftime --release`.
+xtask = "run --package xtask --release --"

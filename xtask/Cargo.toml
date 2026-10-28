@@ -1,0 +1,10 @@
+[package]
+name = "xtask"
+description = "Plugin bundler, invoked as `cargo xtask`"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+nice-plug-xtask = "0.1.1"
