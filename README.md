@@ -98,6 +98,7 @@ benchmark yourself with the command under [Development](#development).
   high bands, and presets.
 
 There are no prebuilt binaries yet; build it from source as described below.
+The source lives at <https://github.com/PluginsBTW/HalfSpeedBtw>.
 
 ## Build requirements
 
@@ -145,7 +146,7 @@ On other distributions, install the equivalent packages; the names vary.
 Clone the repository and change into it:
 
 ```bash
-git clone <repository-url> HalfSpeedBtw && cd HalfSpeedBtw
+git clone https://github.com/PluginsBTW/HalfSpeedBtw.git && cd HalfSpeedBtw
 ```
 
 Build the release bundles:
