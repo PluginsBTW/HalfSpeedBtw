@@ -4,10 +4,28 @@ A Linux-native half-speed loop effect (CLAP + VST3), written in Rust on
 [nice-plug](https://codeberg.org/RustAudio/nice-plug), the maintained community
 successor to nih-plug.
 
-**Status:** Phase 1 skeleton. The plugin passes audio through unchanged with
-zero added latency, exposes its first parameters, and has a placeholder egui
-GUI. The DSP crate has a tested, preallocated ring buffer. No half-speed
-processing yet.
+**Status:** the core half-speed effect works and is covered by tests. It hasn't
+been listening-tested in a DAW yet.
+
+## How it works
+
+Each loop cycle replays the audio captured since the cycle started, slowed
+down by the speed ratio (0.5x, 0.667x or 0.25x). The sample played `t` samples
+into a cycle was captured `ratio * t` samples into it, so it is always in the
+past. That means **zero added latency**: no lookahead and nothing reported to
+the host.
+
+- **Loop length:** 1/16 to 4 bars. While the transport plays with Sync on,
+  cycles line up with the host's bar grid and time signature. Seeking or a DAW
+  loop wrap-around restarts the cycle at the right offset. When the transport
+  is stopped, or Sync is off, loops free-run at the host tempo.
+- **Smoothness:** sets the equal-power crossfade at each loop restart, from
+  1 ms up to a quarter of the loop.
+- **Fade:** sets how the effect fades in and out when switched on or off
+  (off = 5 ms, fast = 50 ms, normal = 250 ms, slow = 1 s). While it's off, the
+  loop keeps running so it stays in time.
+- **Mix:** dry/wet balance, smoothed over 20 ms.
+- **Not yet:** reverse playback, multiband processing, and a waveform display.
 
 ## Layout
 
@@ -41,7 +59,14 @@ mkdir -p ~/.clap ~/.vst3 && cp target/bundled/HalfTime.clap ~/.clap/ && cp -r ta
 ```
 
 Debug builds enable nice-plug's `assert_process_allocs`, which aborts if
-`process()` allocates.
+`process()` allocates. The `no_alloc` test checks the engine for heap use
+directly.
+
+A rough CPU benchmark (real-time factor and worst block time per block size):
+
+```bash
+cargo run --release -p halftime-dsp --example bench
+```
 
 ## Design decisions
 

@@ -111,14 +111,15 @@ impl RingBuffer {
     }
 
     /// Reads at a fractional age using linear interpolation between neighbouring frames. Used
-    /// by playback-rate engines that step through the buffer at non-integer speeds.
-    pub fn get_interpolated(&self, channel: usize, age: f32) -> f32 {
+    /// by playback-rate engines that step through the buffer at non-integer speeds. The age is
+    /// `f64` because multi-second loops need sub-sample precision beyond what `f32` offers.
+    pub fn get_interpolated(&self, channel: usize, age: f64) -> f32 {
         if age.is_nan() || age < 0.0 {
             return 0.0;
         }
 
         let whole = age.floor();
-        let frac = age - whole;
+        let frac = (age - whole) as f32;
         let whole = whole as usize;
         let newer = self.get(channel, whole);
         let older = self.get(channel, whole + 1);
@@ -274,6 +275,6 @@ mod tests {
         assert_eq!(buffer.get_interpolated(0, 0.5), 15.0);
         assert_eq!(buffer.get_interpolated(0, 1.25), 7.5);
         assert_eq!(buffer.get_interpolated(0, -1.0), 0.0);
-        assert_eq!(buffer.get_interpolated(0, f32::NAN), 0.0);
+        assert_eq!(buffer.get_interpolated(0, f64::NAN), 0.0);
     }
 }

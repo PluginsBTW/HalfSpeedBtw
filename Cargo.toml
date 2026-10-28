@@ -12,7 +12,8 @@ license = "GPL-3.0-or-later"
 publish = false
 
 [workspace.lints.rust]
-unsafe_code = "forbid"
+# Denied rather than forbidden so the allocation-counting test allocator can opt out.
+unsafe_code = "deny"
 
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }

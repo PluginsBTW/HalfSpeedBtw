@@ -6,6 +6,8 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use atomic_float::AtomicF32;
+use halftime_dsp::engine::DEFAULT_TEMPO_BPM;
+use halftime_dsp::{HalfSpeedEngine, Timing};
 use nice_plug::prelude::*;
 use nice_plug_egui::{EguiEditor, EguiEditorState, EguiNiceSettings, RepaintNotifier};
 
@@ -15,11 +17,23 @@ mod params;
 use editor::HalfTimeEditor;
 pub use params::HalfTimeParams;
 
+/// The longest lag the engine can replay. Covers 4 bars of 4/4 at 0.25x down to 40 BPM.
+const MAX_LOOP_SECONDS: f32 = 20.0;
+
+/// Values the audio thread publishes for the editor to display.
+#[derive(Default)]
+pub struct DisplayState {
+    pub sample_rate: AtomicF32,
+    /// Progress through the current loop cycle, `0..1`.
+    pub cycle_phase: AtomicF32,
+}
+
 pub struct HalfTime {
     params: Arc<HalfTimeParams>,
     editor_state: Arc<EguiEditorState>,
     repaint_notifier: RepaintNotifier,
-    sample_rate: Arc<AtomicF32>,
+    display: Arc<DisplayState>,
+    engine: HalfSpeedEngine,
 }
 
 impl Default for HalfTime {
@@ -28,7 +42,9 @@ impl Default for HalfTime {
             params: Arc::new(HalfTimeParams::default()),
             editor_state: EguiEditorState::from_size(editor::WINDOW_SIZE, 1.0),
             repaint_notifier: RepaintNotifier::new(),
-            sample_rate: Arc::new(AtomicF32::new(0.0)),
+            display: Arc::new(DisplayState::default()),
+            // Resized in `activate()` once the real layout and sample rate are known.
+            engine: HalfSpeedEngine::new(44_100.0, 0, 0.0),
         }
     }
 }
@@ -68,30 +84,62 @@ impl Plugin for HalfTime {
             self.editor_state.clone(),
             self.repaint_notifier.clone(),
             EguiNiceSettings::new().with_resize_hint(ResizeHint::non_resizable()),
-            HalfTimeEditor::new(self.params.clone(), self.sample_rate.clone()),
+            HalfTimeEditor::new(self.params.clone(), self.display.clone()),
         )
     }
 
     fn activate(
         &mut self,
-        _audio_io_layout: &AudioIOLayout,
+        audio_io_layout: &AudioIOLayout,
         buffer_config: &BufferConfig,
         _context: &mut impl ActivateContext<Self>,
     ) -> bool {
-        self.sample_rate
+        let num_channels = audio_io_layout
+            .main_output_channels
+            .map_or(0, NonZeroU32::get) as usize;
+        self.engine
+            .prepare(buffer_config.sample_rate, num_channels, MAX_LOOP_SECONDS);
+        self.display
+            .sample_rate
             .store(buffer_config.sample_rate, Ordering::Relaxed);
         self.repaint_notifier.request_repaint();
         true
     }
 
+    fn reset(&mut self) {
+        self.engine.reset();
+    }
+
     fn process(
         &mut self,
-        _buffer: &mut Buffer,
+        buffer: &mut Buffer,
         _aux: &mut AuxiliaryBuffers,
-        _context: &mut impl ProcessContext<Self>,
+        context: &mut impl ProcessContext<Self>,
     ) -> ProcessStatus {
-        // Pass-through: nice-plug processes in place, so leaving the buffer untouched forwards
-        // the input unchanged with zero added latency.
+        let transport = context.transport();
+        let beats_per_bar = match (transport.time_sig_numerator, transport.time_sig_denominator) {
+            (Some(num), Some(den)) if num > 0 && den > 0 => num as f64 * 4.0 / den as f64,
+            _ => 4.0,
+        };
+        let timing = Timing {
+            tempo_bpm: transport.tempo.unwrap_or(DEFAULT_TEMPO_BPM),
+            beat: if self.params.sync.value() && transport.playing {
+                transport.pos_beats()
+            } else {
+                None
+            },
+        };
+
+        let settings = self.params.settings(beats_per_bar);
+        self.engine.process(buffer.as_slice(), &settings, &timing);
+
+        if self.editor_state.is_open() {
+            self.display
+                .cycle_phase
+                .store(self.engine.cycle_phase(), Ordering::Relaxed);
+            self.repaint_notifier.request_repaint();
+        }
+
         ProcessStatus::Normal
     }
 }
