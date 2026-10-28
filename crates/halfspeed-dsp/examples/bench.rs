@@ -13,6 +13,9 @@ fn main() {
         ratio: 0.5,
         loop_beats: 1.0,
         smoothness: 0.5,
+        // Both band filters engaged: the most expensive configuration.
+        low_cut_hz: 180.0,
+        high_cut_hz: 6500.0,
         ..Settings::default()
     };
 

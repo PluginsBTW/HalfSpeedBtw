@@ -45,8 +45,8 @@ impl State {
         let v3 = x - self.ic2;
         let v1 = c.a1 * self.ic1 + c.a2 * v3;
         let v2 = self.ic2 + c.a2 * self.ic1 + c.a3 * v3;
-        self.ic1 = 2.0 * v1 - self.ic1;
-        self.ic2 = 2.0 * v2 - self.ic2;
+        self.ic1 = flush_denormal(2.0 * v1 - self.ic1);
+        self.ic2 = flush_denormal(2.0 * v2 - self.ic2);
         (v2, x - K * v1 - v2)
     }
 
@@ -55,6 +55,13 @@ impl State {
     fn settled_on(x: f32) -> Self {
         Self { ic1: 0.0, ic2: x }
     }
+}
+
+/// Zeroes values far below audibility (about -400 dB). When the input falls silent, a filter's
+/// state decays exponentially into subnormal floats, which are many times slower to compute
+/// on x86 and made the whole engine about 25 times slower on silence.
+fn flush_denormal(x: f32) -> f32 {
+    if x.abs() < 1e-20 { 0.0 } else { x }
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -207,6 +214,23 @@ mod tests {
         // 12 dB/octave over more than three octaves is well over 30 dB.
         assert!(below / sine_rms < 0.02, "below {below}");
         assert!(above / sine_rms < 0.02, "above {above}");
+    }
+
+    #[test]
+    fn decaying_tails_never_go_subnormal() {
+        let mut band = band();
+        for i in 0..200_000 {
+            band.tick(180.0, 6500.0);
+            // A short burst, then a long silence for the filters to ring out into.
+            let x = if i < 2000 {
+                (i as f32 * 0.37).sin()
+            } else {
+                0.0
+            };
+            let y = band.process(0, x);
+            assert!(!y.is_subnormal(), "sample {i}: subnormal output {y:e}");
+        }
+        assert_eq!(band.process(0, 0.0), 0.0);
     }
 
     #[test]
