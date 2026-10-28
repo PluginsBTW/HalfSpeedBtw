@@ -97,8 +97,11 @@ benchmark yourself with the command under [Development](#development).
 - **Not built yet:** reverse playback, separate processing for low, mid and
   high bands, and presets.
 
-There are no prebuilt binaries yet; build it from source as described below.
-The source lives at <https://github.com/PluginsBTW/HalfSpeedBtw>.
+Prebuilt bundles for Linux x86-64 are on the
+[Releases page](https://github.com/PluginsBTW/HalfSpeedBtw/releases). They are
+linked against glibc 2.31, so they run on Ubuntu 20.04, Debian 11, Fedora 32
+and newer. Download the `.tar.gz`, unpack it and follow `INSTALL.txt`, or
+build from source as described below.
 
 ## Build requirements
 
@@ -230,6 +233,15 @@ The tests cover:
 - **Real-time safety:** a counting allocator checks that `process()` never
   allocates memory.
 - **Stable IDs:** saved parameter and option IDs never change.
+
+To build a portable release archive in `dist/`, install `zig` and
+`cargo-zigbuild` (on Arch: `sudo pacman -S zig cargo-zigbuild`) and run the
+packaging script. It links against glibc 2.31, includes the third-party
+license notices, and refuses to package a dirty working tree:
+
+```bash
+scripts/package-release.sh
+```
 
 Run the CPU benchmark (real-time factor and worst block per host block size):
 
