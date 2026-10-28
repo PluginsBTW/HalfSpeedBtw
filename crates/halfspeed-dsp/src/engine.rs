@@ -11,6 +11,7 @@
 
 use std::f32::consts::FRAC_PI_2;
 
+use crate::band::{self, Band};
 use crate::clock::LoopClock;
 use crate::ring_buffer::RingBuffer;
 
@@ -22,6 +23,8 @@ const MAX_CROSSFADE_LOOP_FRACTION: f64 = 0.25;
 const MIX_SMOOTHING_SECONDS: f32 = 0.02;
 /// Even with fades off, switching the effect is ramped over this time to avoid a click.
 const MIN_FADE_SECONDS: f32 = 0.005;
+/// Number of slots in the per-cycle waveform overview.
+pub const SCOPE_BINS: usize = 256;
 /// Used when the host doesn't report a tempo.
 pub const DEFAULT_TEMPO_BPM: f64 = 120.0;
 
@@ -35,8 +38,14 @@ pub struct Settings {
     pub loop_beats: f64,
     /// `0..=1`: lengthens the crossfade at each loop restart.
     pub smoothness: f32,
-    /// Time to fade the effect in or out when `enabled` changes.
-    pub fade_seconds: f32,
+    /// Time to fade the effect in when `enabled` turns on.
+    pub fade_in_seconds: f32,
+    /// Time to fade the effect out when `enabled` turns off.
+    pub fade_out_seconds: f32,
+    /// High-pass cutoff for the wet signal; at [`band::MIN_HZ`] the filter is off.
+    pub low_cut_hz: f32,
+    /// Low-pass cutoff for the wet signal; at [`band::MAX_HZ`] the filter is off.
+    pub high_cut_hz: f32,
     /// `0..=1` dry/wet balance.
     pub mix: f32,
 }
@@ -48,7 +57,10 @@ impl Default for Settings {
             ratio: 0.5,
             loop_beats: 4.0,
             smoothness: 0.3,
-            fade_seconds: 0.0,
+            fade_in_seconds: 0.0,
+            fade_out_seconds: 0.0,
+            low_cut_hz: band::MIN_HZ,
+            high_cut_hz: band::MAX_HZ,
             mix: 1.0,
         }
     }
@@ -125,7 +137,7 @@ pub struct HalfSpeedEngine {
     /// Whether a cycle has played since the last reset, i.e. whether there is an old head to
     /// crossfade from. Crossfading a head with itself would boost the level by up to 3 dB.
     has_cycle: bool,
-    /// Gain of the wet path from the enabled state, faded by `fade_seconds`.
+    /// Gain of the wet path from the enabled state, faded by the fade in/out times.
     effect_gain: Ramp,
     mix: Ramp,
     /// Whether the ramps have been snapped to their first targets since the last reset.
@@ -133,6 +145,10 @@ pub struct HalfSpeedEngine {
     /// One frame of input, preallocated so `process` doesn't allocate.
     frame: Vec<f32>,
     loop_samples: f64,
+    band: Band,
+    /// Peak level of the wet signal across the current cycle, for display.
+    scope: [f32; SCOPE_BINS],
+    scope_bin: usize,
 }
 
 impl HalfSpeedEngine {
@@ -150,6 +166,9 @@ impl HalfSpeedEngine {
             primed: false,
             frame: Vec::new(),
             loop_samples: 1.0,
+            band: Band::default(),
+            scope: [0.0; SCOPE_BINS],
+            scope_bin: 0,
         };
         engine.prepare(sample_rate, num_channels, max_loop_seconds);
         engine
@@ -168,6 +187,7 @@ impl HalfSpeedEngine {
             self.buffer.resize(num_channels, capacity);
             self.frame.clear();
             self.frame.resize(num_channels, 0.0);
+            self.band.prepare(sample_rate, num_channels);
         }
         self.reset();
     }
@@ -180,11 +200,20 @@ impl HalfSpeedEngine {
         self.crossfade = None;
         self.has_cycle = false;
         self.primed = false;
+        self.band.reset();
+        self.scope = [0.0; SCOPE_BINS];
+        self.scope_bin = 0;
     }
 
     /// Progress through the current loop cycle in `0..1`, for display.
     pub fn cycle_phase(&self) -> f32 {
         (self.clock.position() / self.loop_samples).clamp(0.0, 1.0) as f32
+    }
+
+    /// Peak wet level per slice of the loop cycle, for display. Slots ahead of the current
+    /// position still hold the previous cycle.
+    pub fn scope(&self) -> &[f32; SCOPE_BINS] {
+        &self.scope
     }
 
     /// Processes one block in place. `channels` holds one slice per channel, all the same length.
@@ -200,9 +229,15 @@ impl HalfSpeedEngine {
             self.mix.jump_to(mix_target);
             self.primed = true;
         }
-        let fade_seconds = settings.fade_seconds.max(MIN_FADE_SECONDS);
-        self.effect_gain
-            .set_target(effect_target, fade_seconds * sample_rate);
+        let fade_seconds = if settings.enabled {
+            settings.fade_in_seconds
+        } else {
+            settings.fade_out_seconds
+        };
+        self.effect_gain.set_target(
+            effect_target,
+            fade_seconds.max(MIN_FADE_SECONDS) * sample_rate,
+        );
         self.mix
             .set_target(mix_target, MIX_SMOOTHING_SECONDS * sample_rate);
 
@@ -245,15 +280,20 @@ impl HalfSpeedEngine {
                 None => (0.0, 1.0),
             };
             let wet_amount = self.effect_gain.next() * self.mix.next();
+            self.band.tick(settings.low_cut_hz, settings.high_cut_hz);
 
+            let mut peak = 0.0f32;
             for (channel, samples) in channels.iter_mut().enumerate().take(num_channels) {
                 let dry = self.frame[channel];
                 let mut wet = new_gain * self.buffer.get_interpolated(channel, self.age);
                 if let Some(fade) = &self.crossfade {
                     wet += old_gain * self.buffer.get_interpolated(channel, fade.old_age);
                 }
+                let wet = self.band.process(channel, wet);
+                peak = peak.max(wet.abs());
                 samples[i] = dry + (wet - dry) * wet_amount;
             }
+            self.record_scope(peak);
 
             // Each new input frame ages the heads by one sample while they advance by `ratio`.
             self.age += 1.0 - ratio;
@@ -265,6 +305,16 @@ impl HalfSpeedEngine {
                 }
             }
         }
+    }
+
+    fn record_scope(&mut self, peak: f32) {
+        let phase = self.clock.position() / self.loop_samples;
+        let bin = ((phase * SCOPE_BINS as f64) as usize).min(SCOPE_BINS - 1);
+        if bin != self.scope_bin {
+            self.scope_bin = bin;
+            self.scope[bin] = 0.0;
+        }
+        self.scope[bin] = self.scope[bin].max(peak);
     }
 
     fn crossfade_len(&self, smoothness: f32) -> f64 {
@@ -417,7 +467,7 @@ mod tests {
             ..Settings::default()
         };
         let on = Settings {
-            fade_seconds: 0.1,
+            fade_in_seconds: 0.1,
             ..Settings::default()
         };
         engine.process(&mut [off_block], &off, &Timing::default());
@@ -502,6 +552,52 @@ mod tests {
             output
                 .iter()
                 .all(|s| s.is_finite() && s.abs() <= 1.0 + 1e-6)
+        );
+    }
+
+    #[test]
+    fn fading_out_uses_the_fade_out_time() {
+        // Same ramp trick as above, switching off with a 50 ms fade-out.
+        let mut engine = HalfSpeedEngine::new(SAMPLE_RATE, 1, 10.0);
+        let mut input = ramp(200);
+        let (on_block, off_block) = input.split_at_mut(10);
+        let on = Settings::default();
+        let off = Settings {
+            enabled: false,
+            fade_in_seconds: 1.0,
+            fade_out_seconds: 0.05,
+            ..Settings::default()
+        };
+        engine.process(&mut [on_block], &on, &Timing::default());
+        engine.process(&mut [off_block], &off, &Timing::default());
+
+        let gain_at = |n: usize| 2.0 * (1.0 - input[n] / n as f32);
+        assert!((gain_at(34) - 0.5).abs() < 1e-3, "{}", gain_at(34));
+        assert!(gain_at(60).abs() < 1e-3, "{}", gain_at(60));
+    }
+
+    #[test]
+    fn scope_records_the_wet_level_per_cycle_slice() {
+        let mut engine = HalfSpeedEngine::new(SAMPLE_RATE, 1, 10.0);
+        // Loud first half-cycle, silent second half: at 0.5x the whole cycle replays the loud
+        // part, so every slot of the second cycle sees signal.
+        let mut input: Vec<f32> = (0..2000)
+            .map(|i| if i % 1000 < 500 { 0.8 } else { 0.0 })
+            .collect();
+        for block in input.chunks_mut(64) {
+            engine.process(
+                &mut [block],
+                &settings(0.5, 1.0),
+                &Timing {
+                    tempo_bpm: TEMPO,
+                    beat: None,
+                },
+            );
+        }
+        let scope = engine.scope();
+        assert!(
+            scope.iter().all(|&peak| (peak - 0.8).abs() < 1e-6),
+            "{scope:?}"
         );
     }
 

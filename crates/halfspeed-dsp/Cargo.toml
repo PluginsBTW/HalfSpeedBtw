@@ -1,6 +1,6 @@
 [package]
-name = "halftime-dsp"
-description = "Plugin-API-independent DSP engine for HalfTime"
+name = "halfspeed-dsp"
+description = "Plugin-API-independent DSP engine for HalfSpeedBtw"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

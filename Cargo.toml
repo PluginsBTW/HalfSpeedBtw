@@ -1,12 +1,12 @@
 [workspace]
 resolver = "3"
-members = ["crates/halftime-dsp", "crates/halftime", "xtask"]
-default-members = ["crates/halftime-dsp", "crates/halftime"]
+members = ["crates/halfspeed-dsp", "crates/halfspeedbtw", "xtask"]
+default-members = ["crates/halfspeed-dsp", "crates/halfspeedbtw"]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.95"
 authors = ["Roman Hofmann"]
 license = "GPL-3.0-or-later"
 publish = false

@@ -1,9 +1,9 @@
-//! Rough CPU benchmark: `cargo run --release -p halftime-dsp --example bench`.
+//! Rough CPU benchmark: `cargo run --release -p halfspeed-dsp --example bench`.
 //! Reports real-time factor and the worst single-block time per host block size.
 
 use std::time::{Duration, Instant};
 
-use halftime_dsp::{HalfSpeedEngine, Settings, Timing};
+use halfspeed_dsp::{HalfSpeedEngine, Settings, Timing};
 
 fn main() {
     let sample_rate = 48_000.0;

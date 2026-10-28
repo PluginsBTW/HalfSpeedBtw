@@ -1,4 +1,4 @@
 # Config for `cargo xtask bundle`.
 
-[halftime]
-name = "HalfTime"
+[halfspeedbtw]
+name = "HalfSpeedBtw"

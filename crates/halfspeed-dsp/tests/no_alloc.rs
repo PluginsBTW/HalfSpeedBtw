@@ -6,7 +6,7 @@
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-use halftime_dsp::{HalfSpeedEngine, Settings, Timing};
+use halfspeed_dsp::{HalfSpeedEngine, Settings, Timing};
 
 struct CountingAllocator;
 
@@ -55,7 +55,9 @@ fn process_and_reset_do_not_allocate() {
         },
         Settings {
             enabled: false,
-            fade_seconds: 1.0,
+            fade_out_seconds: 1.0,
+            low_cut_hz: 200.0,
+            high_cut_hz: 5000.0,
             mix: 0.5,
             ..Settings::default()
         },
