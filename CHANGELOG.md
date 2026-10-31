@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.1.0
 
 - **Editor:** clicking the logo opens the GitHub repository in your browser;
   the cursor turns into a pointing hand over it.
