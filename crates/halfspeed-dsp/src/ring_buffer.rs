@@ -4,8 +4,9 @@
 /// channel.
 ///
 /// Samples are addressed by *age*: age `0` is the most recently written frame, age `1` the one
-/// before it, and so on up to `capacity - 1`. Reads past what has actually been written return
-/// silence, so a freshly cleared buffer behaves like one filled with zeros.
+/// before it, and so on up to `capacity - 1`. Reads past what has actually been written since
+/// the last clear return silence, so a freshly cleared buffer behaves like one filled with
+/// zeros without having to zero it.
 ///
 /// Only [`RingBuffer::new`] and [`RingBuffer::resize`] allocate. Every other method is
 /// real-time safe.
@@ -17,6 +18,8 @@ pub struct RingBuffer {
     capacity: usize,
     /// Index of the slot the next frame will be written to.
     write_pos: usize,
+    /// Frames written since the last clear, up to `capacity`. Older slots hold stale audio.
+    filled: usize,
 }
 
 impl RingBuffer {
@@ -27,6 +30,7 @@ impl RingBuffer {
             num_channels: 0,
             capacity: 0,
             write_pos: 0,
+            filled: 0,
         };
         buffer.resize(num_channels, capacity);
         buffer
@@ -40,12 +44,14 @@ impl RingBuffer {
         self.num_channels = num_channels;
         self.capacity = capacity;
         self.write_pos = 0;
+        self.filled = 0;
     }
 
-    /// Zeroes all stored audio without reallocating.
+    /// Forgets all stored audio. Constant time: a 40 s buffer at 192 kHz took over a
+    /// millisecond to zero, which a host calling reset on the audio thread can't afford.
     pub fn clear(&mut self) {
-        self.data.fill(0.0);
         self.write_pos = 0;
+        self.filled = 0;
     }
 
     pub fn num_channels(&self) -> usize {
@@ -63,7 +69,11 @@ impl RingBuffer {
             let sample = frame.get(channel).copied().unwrap_or(0.0);
             self.data[channel * self.capacity + self.write_pos] = sample;
         }
-        self.write_pos = (self.write_pos + 1) % self.capacity;
+        self.write_pos += 1;
+        if self.write_pos == self.capacity {
+            self.write_pos = 0;
+        }
+        self.filled = (self.filled + 1).min(self.capacity);
     }
 
     /// Writes the same number of frames from per-channel slices, as handed out by a host block.
@@ -96,17 +106,23 @@ impl RingBuffer {
         }
 
         self.write_pos = (self.write_pos + block_len) % self.capacity;
+        self.filled = (self.filled + len).min(self.capacity);
     }
 
     /// Returns the sample written `age` frames ago on `channel`, or silence if either is out of
-    /// range.
+    /// range or that frame predates the last clear.
     pub fn get(&self, channel: usize, age: usize) -> f32 {
-        if channel >= self.num_channels || age >= self.capacity {
+        if channel >= self.num_channels || age >= self.filled {
             return 0.0;
         }
 
         // `write_pos` points one past the newest frame, so age 0 sits at `write_pos - 1`.
-        let index = (self.write_pos + self.capacity - 1 - age) % self.capacity;
+        // Wrapping by comparison instead of `%` keeps an integer division out of every read.
+        let index = if age < self.write_pos {
+            self.write_pos - 1 - age
+        } else {
+            self.write_pos + self.capacity - 1 - age
+        };
         self.data[channel * self.capacity + index]
     }
 
@@ -247,13 +263,49 @@ mod tests {
     }
 
     #[test]
-    fn clear_zeroes_without_changing_layout() {
+    fn clear_silences_without_changing_layout() {
         let mut buffer = RingBuffer::new(2, 4);
         buffer.push_frame(&[1.0, 1.0]);
         buffer.clear();
         assert_eq!((buffer.num_channels(), buffer.capacity()), (2, 4));
         assert_eq!(buffer.get(0, 0), 0.0);
         assert_eq!(buffer.get(1, 3), 0.0);
+    }
+
+    #[test]
+    fn audio_from_before_a_clear_never_reads_back() {
+        let mut buffer = RingBuffer::new(1, 4);
+        for sample in [1.0, 2.0, 3.0, 4.0, 5.0] {
+            buffer.push_frame(&[sample]);
+        }
+        buffer.clear();
+        buffer.push_frame(&[9.0]);
+        assert_eq!(buffer.get(0, 0), 9.0);
+        for age in 1..4 {
+            assert_eq!(buffer.get(0, age), 0.0, "age {age}");
+        }
+        assert_eq!(buffer.get_interpolated(0, 0.5), 4.5);
+
+        // Refilling past the capacity reads only the new audio, as before the clear.
+        for sample in [10.0, 11.0, 12.0, 13.0] {
+            buffer.push_frame(&[sample]);
+        }
+        let expected = [13.0, 12.0, 11.0, 10.0];
+        for (age, value) in expected.into_iter().enumerate() {
+            assert_eq!(buffer.get(0, age), value);
+        }
+    }
+
+    #[test]
+    fn audio_from_before_a_clear_never_reads_back_after_push_block() {
+        let mut buffer = RingBuffer::new(1, 4);
+        buffer.push_block(&[&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]]);
+        buffer.clear();
+        buffer.push_block(&[&[7.0, 8.0]]);
+        assert_eq!(buffer.get(0, 0), 8.0);
+        assert_eq!(buffer.get(0, 1), 7.0);
+        assert_eq!(buffer.get(0, 2), 0.0);
+        assert_eq!(buffer.get(0, 3), 0.0);
     }
 
     #[test]

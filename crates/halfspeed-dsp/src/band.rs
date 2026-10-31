@@ -117,6 +117,10 @@ impl Band {
         } else if self.since_update < UPDATE_INTERVAL {
             self.since_update += 1;
             return;
+        } else if self.low_hz == low_target && self.high_hz == high_target {
+            // Settled: the coefficients already match, so skip the `exp` and `tan` calls.
+            self.since_update = 0;
+            return;
         } else {
             let glide =
                 1.0 - (-(UPDATE_INTERVAL as f64) / (GLIDE_SECONDS * self.sample_rate)).exp();

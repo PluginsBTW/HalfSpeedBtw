@@ -1,5 +1,6 @@
 //! Rough CPU benchmark: `cargo run --release -p halfspeed-dsp --example bench`.
-//! Reports real-time factor and the worst single-block time per host block size.
+//! Reports real-time factor and the worst single-block time per host block size, then the
+//! worst time to reset at each sample rate (hosts may reset on the audio thread).
 
 use std::time::{Duration, Instant};
 
@@ -46,6 +47,21 @@ fn main() {
             worst.as_secs_f64() * 1e6,
             block_duration.as_secs_f64() * 1e6,
             worst.as_secs_f64() / block_duration.as_secs_f64() * 100.0,
+        );
+    }
+
+    for sample_rate in [48_000.0, 96_000.0, 192_000.0] {
+        let mut engine = HalfSpeedEngine::new(sample_rate, 2, 40.0);
+        let mut worst = Duration::ZERO;
+        for _ in 0..10 {
+            let t = Instant::now();
+            engine.reset();
+            worst = worst.max(t.elapsed());
+        }
+        println!(
+            "reset at {:>3} kHz: worst {:>7.3} us",
+            sample_rate / 1000.0,
+            worst.as_secs_f64() * 1e6
         );
     }
 }

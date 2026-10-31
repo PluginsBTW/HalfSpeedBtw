@@ -524,6 +524,37 @@ mod tests {
     }
 
     #[test]
+    fn reset_engine_plays_like_a_fresh_one() {
+        let settings = Settings {
+            smoothness: 0.5,
+            ..settings(0.5, 1.0)
+        };
+        let input = sine(5000, SAMPLE_RATE, 37.0);
+        // Starting playback mid-cycle makes the read head reach back past the first sample
+        // played, where only silence may be heard, never audio from before the reset.
+        let play = |engine: &mut HalfSpeedEngine| {
+            let mut output = input.clone();
+            for (n, block) in output.chunks_mut(64).enumerate() {
+                let timing = Timing {
+                    tempo_bpm: TEMPO,
+                    beat: Some(0.6 + (n * 64) as f64 / 1000.0),
+                };
+                engine.process(&mut [block], &settings, &timing);
+            }
+            output
+        };
+
+        let mut fresh = HalfSpeedEngine::new(SAMPLE_RATE, 1, 10.0);
+        let expected = play(&mut fresh);
+
+        // Fill the whole buffer with other audio first, so stale samples would show up.
+        let mut reused = HalfSpeedEngine::new(SAMPLE_RATE, 1, 10.0);
+        run(&mut reused, &ramp(12_000), 64, &settings, false);
+        reused.reset();
+        assert_eq!(play(&mut reused), expected);
+    }
+
+    #[test]
     fn stereo_channels_are_processed_independently() {
         let mut engine = HalfSpeedEngine::new(SAMPLE_RATE, 2, 10.0);
         let mut left = ramp(2000);

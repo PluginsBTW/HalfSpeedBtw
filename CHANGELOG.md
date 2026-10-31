@@ -5,6 +5,9 @@
 - **Editor:** the power switch moved from the middle of the display to the
   header's right corner, next to SYNC, so it no longer covers the waveform.
   The version number shows in the bottom-right corner.
+- **Performance:** resetting no longer clears the 40-second capture buffer,
+  which took up to 1 ms at 192 kHz on the audio thread and could cause a
+  dropout; it is now instant. Processing is about 13% faster.
 - **Development:** `btw-ui` gains `compact_power_switch` and `version_label`.
 
 ## 0.1.1
