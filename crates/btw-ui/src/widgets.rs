@@ -884,6 +884,176 @@ pub fn key_areas(rect: Rect) -> [Rect; 12] {
     })
 }
 
+/// The TuningMeter's sweep: ±135° for ±100 cents.
+const METER_SWEEP: f32 = 0.75 * PI;
+/// Note letters on the TuningMeter; sharps get a small `#` beside the letter.
+const METER_LETTERS: [&str; 12] = ["C", "C", "D", "D", "E", "F", "F", "G", "G", "A", "A", "B"];
+
+/// Screen angle (egui: 0 = right, clockwise) of a cents value on the TuningMeter, clamped to
+/// ±100 cents. 0 cents points straight up.
+pub fn meter_angle(cents: f32) -> f32 {
+    (cents / 100.0).clamp(-1.0, 1.0) * METER_SWEEP - PI / 2.0
+}
+
+/// Whether the TuningMeter tick at `cents` is lit for a reading of `deviation` cents: the
+/// ticks from the center toward the reading, on its side, up to half a tick past it.
+pub fn meter_tick_lit(cents: f32, deviation: f32) -> bool {
+    cents != 0.0 && cents * deviation > 0.0 && cents.abs() <= deviation.abs() + 1.25
+}
+
+/// A MIDI note as the TuningMeter shows it: its letter, whether it's sharp, and its octave
+/// (MIDI 60 is C4).
+pub fn meter_note(midi_note: i32) -> (&'static str, bool, i32) {
+    let pc = midi_note.rem_euclid(12) as usize;
+    (
+        METER_LETTERS[pc],
+        BLACK_KEYS[pc],
+        midi_note.div_euclid(12) - 1,
+    )
+}
+
+/// The TuningMeter: a round cents dial (±100, ticks every 2.5 cents) around a disc showing the
+/// target note, its octave and the deviation. Ticks light in `glow` from the center toward the
+/// reading, since it's live. `note` is the target MIDI note, or `None` while nothing is sung
+/// (the disc shows a dash). It fills the largest circle that fits in `rect`, minus 24px for
+/// the scale labels; VocalTuneBtw draws it in 250 x 236. While `enabled` is false everything
+/// drops to `opacity-off`.
+pub fn tuning_meter(painter: &Painter, rect: Rect, note: Option<i32>, cents: f32, enabled: bool) {
+    let shade = |color: Color32| {
+        if enabled {
+            color
+        } else {
+            color.gamma_multiply(OPACITY_OFF)
+        }
+    };
+    let center = rect.center();
+    let outer = rect.width().min(rect.height()) * 0.5 - 24.0;
+    let at = |radius: f32, cents: f32| center + radius * Vec2::angled(meter_angle(cents));
+
+    // Scale labels around the dial.
+    for cents in (-100..=100).step_by(25) {
+        let text = if cents > 0 {
+            format!("+{cents}")
+        } else {
+            cents.to_string()
+        };
+        painter.text(
+            at(outer + 14.0, cents as f32),
+            Align2::CENTER_CENTER,
+            text,
+            FontId::proportional(type_scale::CAPTION),
+            shade(TEXT_DIM),
+        );
+    }
+
+    // Face: the display surface, flat.
+    painter.circle_filled(center, outer, shade(DISPLAY));
+    painter.circle_stroke(center, outer, Stroke::new(1.5, shade(EDGE)));
+
+    let deviation = note.map_or(0.0, |_| cents);
+    for step in -40..=40 {
+        let tick = step as f32 * 2.5;
+        let major = step % 10 == 0;
+        let inner = outer * if major { 0.74 } else { 0.79 };
+        let color = if step == 0 {
+            if note.is_some() { TEXT } else { RAISED_HOVER }
+        } else if note.is_some() && meter_tick_lit(tick, deviation) {
+            GLOW
+        } else {
+            EDGE
+        };
+        let width = if major { 2.5 } else { 1.6 };
+        painter.line_segment(
+            [at(inner, tick), at(outer * 0.92, tick)],
+            Stroke::new(width, shade(color)),
+        );
+    }
+
+    // Inner disc.
+    let disc = outer * 0.64;
+    painter.circle_filled(center, disc, shade(RAISED));
+    painter.circle_stroke(center, disc, Stroke::new(1.0, shade(EDGE)));
+
+    let Some(note) = note else {
+        painter.text(
+            center,
+            Align2::CENTER_CENTER,
+            "\u{2013}",
+            FontId::proportional(disc * 0.6),
+            shade(TEXT_DIM),
+        );
+        return;
+    };
+
+    // The note letter is the design system's one exception to the five type sizes: sized to
+    // the disc, so it reads from a distance while singing.
+    let (letter, sharp, octave) = meter_note(note);
+    let letter_center = center + vec2(0.0, -disc * 0.08);
+    let letter_rect = painter.text(
+        letter_center,
+        Align2::CENTER_CENTER,
+        letter,
+        FontId::proportional(disc * 0.95),
+        shade(TEXT),
+    );
+    if sharp {
+        painter.text(
+            pos2(letter_rect.right() + 2.0, letter_center.y - disc * 0.3),
+            Align2::LEFT_CENTER,
+            "#",
+            FontId::proportional(disc * 0.42),
+            shade(TEXT),
+        );
+    }
+    let sign = if deviation >= 0.0 { "+" } else { "" };
+    painter.text(
+        center + vec2(0.0, disc * 0.525),
+        Align2::CENTER_CENTER,
+        format!("octave {octave}  {sign}{} ct", deviation.round() as i32),
+        FontId::proportional(type_scale::VALUE),
+        shade(TEXT_DIM),
+    );
+}
+
+/// The settings gear: a bare 8-tooth gear in a 28px button that opens a settings page. It
+/// isn't a parameter, so the editor keeps `open` and flips it when this returns true. The gear
+/// is `accent` while the page is open (a selection), `text` when hovered, `text-dim` otherwise.
+/// VocalTuneBtw puts it left of the compact PowerSwitch, centered 38px left of it.
+pub fn gear_button(ui: &Ui, center: Pos2, open: bool) -> bool {
+    let response = ui
+        .interact(
+            Rect::from_center_size(center, Vec2::splat(28.0)),
+            ui.scope_id().with("gear"),
+            Sense::click(),
+        )
+        .on_hover_cursor(CursorIcon::PointingHand)
+        .on_hover_text(if open {
+            "Close the settings"
+        } else {
+            "More settings"
+        });
+
+    let color = match (open, response.hovered()) {
+        (true, _) => ACCENT,
+        (false, true) => TEXT,
+        (false, false) => TEXT_DIM,
+    };
+    let painter = ui.painter();
+    let radius = 10.0;
+    for tooth in 0..8 {
+        let direction = Vec2::angled(TAU * tooth as f32 / 8.0);
+        painter.line_segment(
+            [
+                center + radius * 0.62 * direction,
+                center + radius * 0.95 * direction,
+            ],
+            Stroke::new(3.0, color),
+        );
+    }
+    painter.circle_stroke(center, radius * 0.65, Stroke::new(2.5, color));
+    response.clicked()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1147,5 +1317,79 @@ mod tests {
         click(&ctx, pos2(100.0, 15.0));
         click(&ctx, pos2(100.0, 15.0));
         assert!(!menu_is_open(&ctx));
+    }
+
+    #[test]
+    fn meter_angle_points_up_at_zero_and_sweeps_135_degrees() {
+        assert!((meter_angle(0.0) + PI / 2.0).abs() < 1e-6);
+        assert!((meter_angle(100.0) - meter_angle(0.0) - 0.75 * PI).abs() < 1e-6);
+        assert!((meter_angle(-100.0) - meter_angle(0.0) + 0.75 * PI).abs() < 1e-6);
+        assert_eq!(meter_angle(250.0), meter_angle(100.0));
+    }
+
+    #[test]
+    fn meter_lights_ticks_from_the_center_to_the_reading() {
+        assert!(meter_tick_lit(2.5, 12.0));
+        assert!(meter_tick_lit(12.5, 12.0)); // half a tick past the reading
+        assert!(!meter_tick_lit(15.0, 12.0));
+        assert!(!meter_tick_lit(-2.5, 12.0)); // the other side
+        assert!(meter_tick_lit(-10.0, -10.0));
+        assert!(!meter_tick_lit(0.0, 12.0)); // the center tick has its own color
+        assert!(!meter_tick_lit(2.5, 0.0));
+    }
+
+    #[test]
+    fn meter_names_notes_with_their_octave() {
+        assert_eq!(meter_note(60), ("C", false, 4));
+        assert_eq!(meter_note(61), ("C", true, 4));
+        assert_eq!(meter_note(57), ("A", false, 3));
+        assert_eq!(meter_note(-1), ("B", false, -2));
+    }
+
+    #[test]
+    fn tuning_meter_draws_idle_active_and_off() {
+        let ctx = egui::Context::default();
+        for (note, enabled) in [(None, true), (Some(61), true), (Some(57), false)] {
+            let input = egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(300.0, 300.0))),
+                ..Default::default()
+            };
+            let mut output = ctx.run_ui(input, |ui| {
+                let rect = Rect::from_min_size(pos2(25.0, 32.0), vec2(250.0, 236.0));
+                tuning_meter(ui.painter(), rect, note, -37.0, enabled);
+            });
+            output.textures_delta.clear();
+            assert!(!output.shapes.is_empty());
+        }
+    }
+
+    /// Runs one frame of a gear button at (50, 50) and returns whether it reported a click.
+    fn gear_frame(ctx: &egui::Context, events: Vec<egui::Event>) -> (bool, egui::FullOutput) {
+        let input = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(100.0, 100.0))),
+            events,
+            ..Default::default()
+        };
+        let mut clicked = false;
+        let mut output = ctx.run_ui(input, |ui| {
+            clicked = gear_button(ui, pos2(50.0, 50.0), false);
+        });
+        output.textures_delta.clear();
+        (clicked, output)
+    }
+
+    #[test]
+    fn gear_button_reports_clicks_with_a_pointing_hand() {
+        let ctx = egui::Context::default();
+        gear_frame(&ctx, vec![]);
+        let (_, hover) = gear_frame(&ctx, vec![egui::Event::PointerMoved(pos2(55.0, 45.0))]);
+        assert_eq!(hover.platform_output.cursor_icon, CursorIcon::PointingHand);
+        let [press, release] = click_at(pos2(55.0, 45.0));
+        assert!(!gear_frame(&ctx, press).0);
+        assert!(gear_frame(&ctx, release).0);
+        // Outside its 28px square it ignores the pointer.
+        let [press, release] = click_at(pos2(80.0, 50.0));
+        gear_frame(&ctx, press);
+        assert!(!gear_frame(&ctx, release).0);
     }
 }
