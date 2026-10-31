@@ -33,7 +33,8 @@ never allocates memory on the audio thread.
   dry signal keeps its full range.
 - **Mix:** blends the dry and slowed-down signals.
 - **Live waveform:** the display shows the slowed-down signal across the
-  current loop, with a playhead.
+  current loop, with a playhead. Nothing covers it: the power switch sits in
+  the header.
 - **Click-free:** every parameter change and every loop restart is ramped or
   crossfaded, and all parameters can be automated sample-accurately.
 - **Mono and stereo.**
@@ -48,7 +49,7 @@ never allocates memory on the audio thread.
 
 | Control | Range | Default | What it does |
 | --- | --- | --- | --- |
-| **Power switch** (center of the display) | On / Off | On | Fades the effect in or out. While it's off, the loop keeps running, so switching it back on lands in time. |
+| **Power switch** (top right corner) | On / Off | On | Fades the effect in or out. While it's off, the loop keeps running, so switching it back on lands in time. |
 | **Loop** | 1/16 to 8 bars | 1 bar | Length of each loop cycle. |
 | **Mode** | 1.5x, 2x, 4x | 2x | How much slower the loop plays. |
 | **Fade In** | Inst to 16 bars | Inst | How long the effect takes to fade in after you switch it on. |
@@ -56,7 +57,7 @@ never allocates memory on the audio thread.
 | **Smooth** | 0 to 100% | 30% | Crossfade at each loop restart: 1 ms at 0%, a quarter of the loop at 100%. |
 | **Band** | 20 Hz to 20 kHz | Fully open | Low cut and high cut on the slowed-down signal (12 dB/octave). At their end stops the filters are switched off completely. |
 | **Mix** | 0 to 100% | 100% | Dry/wet balance. |
-| **Sync** (top right) | On / Off | On | On: loops follow the host's bar grid while playing. Off: loops free-run at the host tempo. |
+| **Sync** (top right, next to the power switch) | On / Off | On | On: loops follow the host's bar grid while playing. Off: loops free-run at the host tempo. |
 
 **Mouse:** drag knobs up or down, and hold Shift for fine control.
 Double-click a knob or a band handle to reset it. Every control is also
@@ -79,9 +80,11 @@ At each restart the old and new playback positions are crossfaded. **Smooth**
 sets how long that crossfade is.
 
 **CPU use** is low. The included benchmark runs with both band filters engaged
-at 48 kHz in stereo, and takes about 0.25% of one core on average. The slowest
-32-sample block used 4% of its time budget. Your numbers will vary; run the
-benchmark yourself with the command under [Development](#development).
+at 48 kHz in stereo, and takes about 0.2% of one core on average. The slowest
+32-sample block used under 4% of its time budget. Resetting, which some hosts
+do on the audio thread when playback starts, takes well under a microsecond at
+any sample rate. Your numbers will vary; run the benchmark yourself with the
+command under [Development](#development).
 
 ## Status and compatibility
 
@@ -229,6 +232,8 @@ The tests cover:
 - **Sync:** loops align to the beat grid and handle transport jumps.
 - **Transitions:** fade timing, and no clicks at loop restarts or when a
   filter engages.
+- **Reset:** after a reset the plugin plays exactly like a fresh instance;
+  audio from before the reset is never heard again.
 - **Filters:** band attenuation, and tails that never decay into slow
   subnormal numbers.
 - **Real-time safety:** a counting allocator checks that `process()` never
@@ -244,7 +249,8 @@ license notices, and refuses to package a dirty working tree:
 scripts/package-release.sh
 ```
 
-Run the CPU benchmark (real-time factor and worst block per host block size):
+Run the CPU benchmark (real-time factor and worst block per host block size,
+then the time to reset at 48, 96 and 192 kHz):
 
 ```bash
 cargo run --release -p halfspeed-dsp --example bench

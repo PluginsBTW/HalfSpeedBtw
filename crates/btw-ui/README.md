@@ -44,7 +44,7 @@ fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut nice_plug_egui::Frame) {
 | --- | --- |
 | `palette` | The colors (`BACKGROUND`, `SURFACE`, `RAISED`, `RAISED_HOVER`, `EDGE`, `DISPLAY`, `ACCENT`, `GLOW`, `TEXT`, `TEXT_DIM`), the translucent variants (`accent_halo()` and friends), `OPACITY_OFF`, and a WCAG `contrast()` function |
 | `type_scale` | The five font sizes: `WORDMARK` 22, `CONTROL_LABEL` and `VALUE_LARGE` 13, `VALUE` 12, `CAPTION` 11 |
-| `widgets` | `panel`, `wordmark`, `status`, `caption`, `toggle_pill`, `segmented`, `knob`, `display`, `power_switch`, `range_slider`, and `set_param` for one-gesture parameter changes |
+| `widgets` | `panel`, `wordmark`, `status`, `caption`, `toggle_pill`, `segmented`, `knob`, `display`, `power_switch` (on the display) and `compact_power_switch` (in the header), `range_slider`, `version_label`, and `set_param` for one-gesture parameter changes |
 | `geometry` | `arc_points`, `lerp_color`, and `LogScale` for logarithmic sliders |
 
 Every widget that changes a parameter reports it to the host as one automation

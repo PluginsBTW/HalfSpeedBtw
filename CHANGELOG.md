@@ -1,6 +1,9 @@
 # Changelog
 
-## Unreleased
+## 1.0.0
+
+The first stable release. Plugin and parameter IDs are unchanged, so projects
+saved with 0.1.x open as before.
 
 - **Editor:** the power switch moved from the middle of the display to the
   header's right corner, next to SYNC, so it no longer covers the waveform.
