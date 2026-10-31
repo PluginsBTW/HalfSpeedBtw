@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- **Editor:** clicking the logo opens the GitHub repository in your browser;
+  the cursor turns into a pointing hand over it.
+- **Development:** `btw-ui` gains `link`, and `wordmark` returns the area it
+  covers.
+
 ## 1.0.0
 
 The first stable release. Plugin and parameter IDs are unchanged, so projects

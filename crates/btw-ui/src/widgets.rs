@@ -69,8 +69,9 @@ pub fn status(painter: &Painter, right_center: Pos2, text: &str) {
 }
 
 /// The clock mark and the product name: `first` in text, `second` in accent, then `Btw` in
-/// dim text. Pass an empty `second` for one-word names.
-pub fn wordmark(painter: &Painter, mark_center: Pos2, first: &str, second: &str) {
+/// dim text. Pass an empty `second` for one-word names. Returns the area it covers, for a
+/// [`link`].
+pub fn wordmark(painter: &Painter, mark_center: Pos2, first: &str, second: &str) -> Rect {
     // A slowed-down clock: a ring with one long, lazy hand.
     painter.circle_stroke(mark_center, 11.0, Stroke::new(2.5, ACCENT));
     let hand = Stroke::new(2.5, GLOW);
@@ -78,6 +79,7 @@ pub fn wordmark(painter: &Painter, mark_center: Pos2, first: &str, second: &str)
     painter.line_segment([mark_center, mark_center + vec2(5.0, 3.0)], hand);
 
     let font = FontId::proportional(type_scale::WORDMARK);
+    let mut area = Rect::from_center_size(mark_center, Vec2::splat(26.0));
     let mut x = mark_center.x + 20.0;
     for (word, color) in [(first, TEXT), (second, ACCENT), ("Btw", TEXT_DIM)] {
         let rect = painter.text(
@@ -87,7 +89,21 @@ pub fn wordmark(painter: &Painter, mark_center: Pos2, first: &str, second: &str)
             font.clone(),
             color,
         );
+        area = area.union(rect);
         x = rect.right();
+    }
+    area
+}
+
+/// Makes `rect` open `url` in the browser on click, with a pointing-hand cursor and `url` as
+/// the tooltip. Draws nothing, so the wordmark keeps its look; use it on the wordmark's area.
+pub fn link(ui: &Ui, rect: Rect, url: &str) {
+    let response = ui
+        .interact(rect, ui.scope_id().with(url), Sense::click())
+        .on_hover_cursor(CursorIcon::PointingHand)
+        .on_hover_text(url);
+    if response.clicked() {
+        ui.ctx().open_url(egui::OpenUrl::new_tab(url));
     }
 }
 
@@ -552,5 +568,69 @@ fn drag_handle(
     }
     if response.double_clicked() {
         reset_param(setter, param);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const URL: &str = "https://example.com/plugin";
+
+    /// Runs one frame with `events`, placing a link over a 100 x 30 area at the top left.
+    fn frame(ctx: &egui::Context, events: Vec<egui::Event>) -> egui::FullOutput {
+        let input = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(200.0, 100.0))),
+            events,
+            ..Default::default()
+        };
+        let mut output = ctx.run_ui(input, |ui| {
+            link(ui, Rect::from_min_size(Pos2::ZERO, vec2(100.0, 30.0)), URL);
+        });
+        // No renderer here to take the font atlas uploads.
+        output.textures_delta.clear();
+        output
+    }
+
+    fn pointer(button: egui::PointerButton, pressed: bool) -> egui::Event {
+        egui::Event::PointerButton {
+            pos: pos2(50.0, 15.0),
+            button,
+            pressed,
+            modifiers: Default::default(),
+        }
+    }
+
+    fn opened_urls(output: &egui::FullOutput) -> Vec<String> {
+        output
+            .platform_output
+            .commands
+            .iter()
+            .filter_map(|command| match command {
+                egui::OutputCommand::OpenUrl(open) => Some(open.url.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn link_shows_a_pointing_hand_and_opens_its_url_on_click() {
+        let ctx = egui::Context::default();
+        frame(&ctx, vec![]);
+        let hover = frame(&ctx, vec![egui::Event::PointerMoved(pos2(50.0, 15.0))]);
+        assert_eq!(hover.platform_output.cursor_icon, CursorIcon::PointingHand);
+        assert!(opened_urls(&hover).is_empty());
+
+        frame(&ctx, vec![pointer(egui::PointerButton::Primary, true)]);
+        let click = frame(&ctx, vec![pointer(egui::PointerButton::Primary, false)]);
+        assert_eq!(opened_urls(&click), [URL]);
+    }
+
+    #[test]
+    fn link_ignores_the_pointer_outside_its_area() {
+        let ctx = egui::Context::default();
+        frame(&ctx, vec![]);
+        let away = frame(&ctx, vec![egui::Event::PointerMoved(pos2(150.0, 80.0))]);
+        assert_eq!(away.platform_output.cursor_icon, CursorIcon::Default);
     }
 }

@@ -20,6 +20,8 @@ use crate::DisplayState;
 use crate::params::HalfSpeedParams;
 
 pub const WINDOW_SIZE: LogicalSize<f32> = LogicalSize::new(680.0, 480.0);
+/// Where a click on the wordmark leads.
+const REPOSITORY_URL: &str = "https://github.com/PluginsBTW/HalfSpeedBtw";
 
 pub struct HalfSpeedEditor {
     params: Arc<HalfSpeedParams>,
@@ -71,7 +73,8 @@ impl NiceEguiApp for HalfSpeedEditor {
         widgets::panel(ui);
 
         // Header.
-        widgets::wordmark(&painter, point(42.0, 38.0), "Half", "Speed");
+        let wordmark = widgets::wordmark(&painter, point(42.0, 38.0), "Half", "Speed");
+        widgets::link(ui, wordmark, REPOSITORY_URL);
         // Right to left from the panel's content edge: power, SYNC, status.
         let sample_rate = self.display.sample_rate.load(Ordering::Relaxed);
         widgets::status(
