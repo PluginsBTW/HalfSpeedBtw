@@ -675,13 +675,14 @@ pub fn dropdown_menu(
     let strip_bottom = center_y + 15.0;
     let columns = options.len().div_ceil(MENU_ROWS).max(1);
     let rows = options.len().min(MENU_ROWS);
-    let menu = Rect::from_min_size(
-        pos2(value_left, strip_bottom + 6.0),
-        vec2(
-            columns as f32 * MENU_COLUMN_WIDTH,
-            8.0 + rows as f32 * MENU_ITEM_HEIGHT,
-        ),
+    let size = vec2(
+        columns as f32 * MENU_COLUMN_WIDTH,
+        8.0 + rows as f32 * MENU_ITEM_HEIGHT,
     );
+    // Left-aligned with the value, unless that would run past the strip's right end (12px
+    // beyond the area): then right-aligned with the strip, so the menu stays in the window.
+    let left = value_left.min(area.right() + 12.0 - size.x);
+    let menu = Rect::from_min_size(pos2(left, strip_bottom + 6.0), size);
 
     let mut chosen = None;
     egui::Area::new(id.with("menu"))
@@ -1083,6 +1084,42 @@ mod tests {
         let item = pos2(menu_left + MENU_COLUMN_WIDTH + 40.0, 36.0 + 4.0 + 12.0);
         assert_eq!(click(&ctx, item), Some(7));
         assert!(!menu_is_open(&ctx));
+    }
+
+    #[test]
+    fn a_wide_menu_stays_inside_the_strip() {
+        // A dropdown in the right half of a strip ending at x 300: its two-column menu (280px)
+        // can't start at its value, so it ends at the strip's right end instead.
+        let ctx = egui::Context::default();
+        let frame = |events| {
+            let input = egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(400.0, 400.0))),
+                events,
+                ..Default::default()
+            };
+            let mut output = ctx.run_ui(input, |ui| {
+                let area = Rect::from_min_size(pos2(160.0, 0.0), vec2(128.0, 30.0));
+                dropdown_menu(ui, area, "SCALE", &OPTIONS, 2);
+            });
+            output.textures_delta.clear();
+        };
+        let [press, release] = click_at(pos2(200.0, 15.0));
+        frame(vec![egui::Event::PointerMoved(pos2(200.0, 15.0))]);
+        frame(press);
+        frame(release);
+        frame(vec![]);
+        let menu = ctx
+            .memory(|memory| {
+                memory
+                    .areas()
+                    .visible_layer_ids()
+                    .into_iter()
+                    .filter(|layer| layer.order == egui::Order::Foreground)
+                    .find_map(|layer| memory.area_rect(layer.id))
+            })
+            .expect("menu open");
+        assert_eq!(menu.right(), 300.0);
+        assert_eq!(menu.left(), 20.0);
     }
 
     #[test]
