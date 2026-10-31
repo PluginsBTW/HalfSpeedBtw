@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- **Editor:** the power switch moved from the middle of the display to the
+  header's right corner, next to SYNC, so it no longer covers the waveform.
+  The version number shows in the bottom-right corner.
+- **Development:** `btw-ui` gains `compact_power_switch` and `version_label`.
+
 ## 0.1.1
 
 - **Editor:** captions, unselected labels and the status line use a lighter

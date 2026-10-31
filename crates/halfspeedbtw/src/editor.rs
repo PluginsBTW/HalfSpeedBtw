@@ -1,6 +1,6 @@
-//! The HalfSpeedBtw editor: loop buttons on top, the waveform display with the power switch
-//! in the middle flanked by fade knobs, mode buttons below it, and smoothness, band and mix
-//! controls along the bottom.
+//! The HalfSpeedBtw editor: SYNC and the power switch in the header, loop buttons below it,
+//! the waveform display in the middle flanked by fade knobs, mode buttons below it, and
+//! smoothness, band and mix controls along the bottom, with the version in the corner.
 //!
 //! The look and the controls come from `btw-ui`; this file only lays them out on the fixed
 //! 680 x 480 window and connects them to the parameters.
@@ -72,20 +72,22 @@ impl NiceEguiApp for HalfSpeedEditor {
 
         // Header.
         widgets::wordmark(&painter, point(42.0, 38.0), "Half", "Speed");
+        // Right to left from the panel's content edge: power, SYNC, status.
         let sample_rate = self.display.sample_rate.load(Ordering::Relaxed);
         widgets::status(
             &painter,
-            point(540.0, 38.0),
+            point(508.0, 38.0),
             &format!("{:.1} kHz · 0 latency", sample_rate / 1000.0),
         );
         widgets::toggle_pill(
             ui,
             &setter,
-            at(556.0, 25.0, 92.0, 26.0),
+            at(524.0, 25.0, 92.0, 26.0),
             &params.sync,
             "SYNC",
             "Follow the host's bar grid while playing",
         );
+        widgets::compact_power_switch(ui, &setter, point(635.0, 38.0), &params.enabled);
 
         widgets::segmented(
             ui,
@@ -96,7 +98,7 @@ impl NiceEguiApp for HalfSpeedEditor {
         );
         widgets::caption(&painter, point(340.0, 112.0), "LOOP");
 
-        // Center: fade knobs around the display and its power switch.
+        // Center: fade knobs around the display.
         widgets::knob(
             ui,
             &setter,
@@ -116,7 +118,6 @@ impl NiceEguiApp for HalfSpeedEditor {
             self.display.cycle_phase.load(Ordering::Relaxed),
             params.enabled.value(),
         );
-        widgets::power_switch(ui, &setter, display.center(), &params.enabled);
         widgets::knob(
             ui,
             &setter,
@@ -164,5 +165,7 @@ impl NiceEguiApp for HalfSpeedEditor {
             &params.mix,
             "MIX",
         );
+
+        widgets::version_label(&painter, point(652.0, 456.0), env!("CARGO_PKG_VERSION"));
     }
 }

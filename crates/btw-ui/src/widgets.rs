@@ -291,7 +291,8 @@ pub fn knob<P: Param>(
 ///
 /// `levels` are peak levels in `0..=1` across one cycle (any count; HalfSpeedBtw uses 256),
 /// `phase` is the playhead position in `0..=1`. While `enabled` is false everything inside
-/// is dimmed. Draw the [`power_switch`] on top afterwards.
+/// is dimmed. Draw the [`power_switch`] on top afterwards, unless the plugin uses the
+/// [`compact_power_switch`] in the header.
 pub fn display(painter: &Painter, rect: Rect, levels: &[f32], phase: f32, enabled: bool) {
     let shade = |color: Color32| {
         if enabled {
@@ -346,6 +347,54 @@ pub fn display(painter: &Painter, rect: Rect, levels: &[f32], phase: f32, enable
     ];
     painter.line_segment(playhead, Stroke::new(5.0, shade(palette::glow_halo())));
     painter.line_segment(playhead, Stroke::new(1.5, shade(GLOW)));
+}
+
+/// The build's version, `v` plus `version`, as a dim caption right-aligned to
+/// `right_center`: the panel's bottom-right corner (x 652, on the bottom row's caption line).
+pub fn version_label(painter: &Painter, right_center: Pos2, version: &str) {
+    painter.text(
+        right_center,
+        Align2::RIGHT_CENTER,
+        format!("v{version}"),
+        FontId::proportional(type_scale::CAPTION),
+        TEXT_DIM,
+    );
+}
+
+/// The power switch at header size: a 26px round button styled like the toggle pills next to
+/// it, with the power symbol at half the size of the display-centered [`power_switch`]. Put it
+/// at the content's right edge (center x 635, y 38), right of the pills. Use one of the two
+/// switches per plugin, never both.
+pub fn compact_power_switch(ui: &Ui, setter: &ParamSetter, center: Pos2, param: &BoolParam) {
+    let on = param.value();
+    let radius = 13.0;
+    let response = ui
+        .interact(
+            Rect::from_center_size(center, Vec2::splat(2.0 * radius)),
+            ui.scope_id().with("power"),
+            Sense::click(),
+        )
+        .on_hover_cursor(CursorIcon::PointingHand)
+        .on_hover_text("Turn the effect on or off");
+    if response.clicked() {
+        set_param(setter, param, !on);
+    }
+
+    let (fill, border, icon) = match (on, response.hovered()) {
+        (true, _) => (palette::accent_halo(), ACCENT, GLOW),
+        (false, true) => (RAISED, EDGE, TEXT),
+        (false, false) => (RAISED, EDGE, TEXT_DIM),
+    };
+    let painter = ui.painter();
+    painter.circle_filled(center, radius, fill);
+    painter.circle_stroke(center, radius - 0.5, Stroke::new(1.0, border));
+    let gap = 0.7;
+    let arc = arc_points(center, 6.0, -PI / 2.0 + gap, TAU - 2.0 * gap, 24);
+    painter.add(Shape::line(arc, Stroke::new(2.0, icon)));
+    painter.line_segment(
+        [center + vec2(0.0, -8.0), center + vec2(0.0, -2.0)],
+        Stroke::new(2.0, icon),
+    );
 }
 
 /// The round on/off switch for the whole effect, usually centered on the display.
