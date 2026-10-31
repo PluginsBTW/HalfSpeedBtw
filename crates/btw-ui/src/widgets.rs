@@ -571,6 +571,319 @@ fn drag_handle(
     }
 }
 
+/// Lays out a strip of `N` related [`dropdown`]s: paints the strip (`raised`, hairline,
+/// 30px tall in the design) and returns the area of each dropdown, 12px in from the ends and
+/// 16px apart, sharing the width equally.
+pub fn dropdown_strip<const N: usize>(painter: &Painter, rect: Rect) -> [Rect; N] {
+    painter.rect_filled(rect, 7, RAISED);
+    painter.rect_stroke(rect, 7, Stroke::new(1.0, EDGE), StrokeKind::Inside);
+    let inner = rect.shrink2(vec2(12.0, 0.0));
+    let gap = 16.0;
+    let width = (inner.width() - gap * (N as f32 - 1.0)) / N as f32;
+    std::array::from_fn(|i| {
+        Rect::from_min_size(
+            inner.min + vec2(i as f32 * (width + gap), 0.0),
+            vec2(width, inner.height()),
+        )
+    })
+}
+
+/// Items per menu column; longer menus wrap into more columns so they stay inside the window.
+pub const MENU_ROWS: usize = 7;
+/// Width of one menu column.
+pub const MENU_COLUMN_WIDTH: f32 = 140.0;
+/// Height of one menu item.
+pub const MENU_ITEM_HEIGHT: f32 = 24.0;
+
+/// A dropdown for an enum parameter inside `area` (from [`dropdown_strip`]): the caption, the
+/// value in accent and a chevron at the right end. A click opens a menu of every variant 6px
+/// below the strip; choosing one closes it and sets the parameter as one gesture.
+pub fn dropdown<T: Enum + PartialEq + 'static>(
+    ui: &Ui,
+    setter: &ParamSetter,
+    area: Rect,
+    caption: &str,
+    param: &EnumParam<T>,
+) {
+    let current = param.value().to_index();
+    if let Some(index) = dropdown_menu(ui, area, caption, T::variants(), current) {
+        set_param(setter, param, T::from_index(index));
+    }
+}
+
+/// The parameter-free part of [`dropdown`]: draws it, runs its menu and returns the index the
+/// person chose, if it differs from `selected`.
+pub fn dropdown_menu(
+    ui: &Ui,
+    area: Rect,
+    caption: &str,
+    options: &[&str],
+    selected: usize,
+) -> Option<usize> {
+    let id = ui.scope_id().with("dropdown").with(caption);
+    // One menu open at a time, across all dropdowns of the editor.
+    let open_id = egui::Id::unique("btw_ui_open_dropdown");
+    let is_open = ui.data(|data| data.get_temp::<egui::Id>(open_id)) == Some(id);
+
+    let painter = ui.painter();
+    let center_y = area.center().y;
+    let caption_rect = painter.text(
+        pos2(area.left(), center_y),
+        Align2::LEFT_CENTER,
+        caption,
+        FontId::proportional(type_scale::CAPTION),
+        TEXT_DIM,
+    );
+    let value_left = caption_rect.right() + 12.0;
+    painter.text(
+        pos2(value_left, center_y),
+        Align2::LEFT_CENTER,
+        options.get(selected).copied().unwrap_or_default(),
+        FontId::proportional(type_scale::CONTROL_LABEL),
+        ACCENT,
+    );
+    let chevron = pos2(area.right() - 4.0, center_y);
+    painter.add(Shape::line(
+        vec![
+            chevron + vec2(-4.0, -2.0),
+            chevron + vec2(0.0, 2.0),
+            chevron + vec2(4.0, -2.0),
+        ],
+        Stroke::new(1.5, TEXT_DIM),
+    ));
+
+    let response = ui
+        .interact(area, id, Sense::click())
+        .on_hover_cursor(CursorIcon::PointingHand);
+    if response.clicked() {
+        let next = if is_open { None } else { Some(id) };
+        ui.data_mut(|data| match next {
+            Some(id) => {
+                data.insert_temp(open_id, id);
+            }
+            None => {
+                data.remove::<egui::Id>(open_id);
+            }
+        });
+        return None;
+    }
+    if !is_open {
+        return None;
+    }
+
+    // The strip is 30px tall in the design; the menu hangs 6px below it.
+    let strip_bottom = center_y + 15.0;
+    let columns = options.len().div_ceil(MENU_ROWS).max(1);
+    let rows = options.len().min(MENU_ROWS);
+    let size = vec2(
+        columns as f32 * MENU_COLUMN_WIDTH,
+        8.0 + rows as f32 * MENU_ITEM_HEIGHT,
+    );
+    // Left-aligned with the value, unless that would run past the strip's right end (12px
+    // beyond the area): then right-aligned with the strip, so the menu stays in the window.
+    let left = value_left.min(area.right() + 12.0 - size.x);
+    let menu = Rect::from_min_size(pos2(left, strip_bottom + 6.0), size);
+
+    let mut chosen = None;
+    egui::Area::new(id.with("menu"))
+        .order(egui::Order::Foreground)
+        .fixed_pos(menu.min)
+        .constrain(false)
+        .show(ui.ctx(), |menu_ui| {
+            // Claim the whole menu, so the area has its size and nothing under it gets the
+            // pointer.
+            menu_ui.allocate_rect(menu, Sense::click());
+            let painter = menu_ui.painter();
+            painter.rect_filled(menu, 7, RAISED);
+            painter.rect_stroke(menu, 7, Stroke::new(1.0, EDGE), StrokeKind::Inside);
+            for (index, name) in options.iter().enumerate() {
+                let item = Rect::from_min_size(
+                    menu.min
+                        + vec2(
+                            (index / MENU_ROWS) as f32 * MENU_COLUMN_WIDTH,
+                            4.0 + (index % MENU_ROWS) as f32 * MENU_ITEM_HEIGHT,
+                        ),
+                    vec2(MENU_COLUMN_WIDTH, MENU_ITEM_HEIGHT),
+                );
+                let item_response = menu_ui
+                    .interact(item, id.with(index), Sense::click())
+                    .on_hover_cursor(CursorIcon::PointingHand);
+                if item_response.hovered() {
+                    painter.rect_filled(item, 0, RAISED_HOVER);
+                }
+                painter.text(
+                    pos2(item.left() + 12.0, item.center().y),
+                    Align2::LEFT_CENTER,
+                    *name,
+                    FontId::proportional(type_scale::CONTROL_LABEL),
+                    if index == selected { ACCENT } else { TEXT },
+                );
+                if item_response.clicked() {
+                    chosen = Some(index);
+                }
+            }
+        });
+
+    let clicked_elsewhere = ui.input(|input| {
+        input.pointer.any_click()
+            && input
+                .pointer
+                .interact_pos()
+                .is_some_and(|pos| !menu.contains(pos) && !area.contains(pos))
+    });
+    let escape = ui.input(|input| input.key_pressed(egui::Key::Escape));
+    if chosen.is_some() || clicked_elsewhere || escape {
+        ui.data_mut(|data| data.remove::<egui::Id>(open_id));
+    }
+    chosen.filter(|&index| index != selected)
+}
+
+/// Whether a NoteKeyboard click removes notes (VocalTuneBtw) or picks the root (EasyBtw).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyboardMode {
+    /// Clicking a note in the scale toggles it out of the scale and back. Keys outside the
+    /// scale do nothing.
+    Remove,
+    /// Clicking any key makes it the root (the target). Clicking the root does nothing.
+    RootPick,
+}
+
+/// What a [`note_keyboard`] shows, as 12-bit pitch-class masks (bit 0 = C).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct KeyboardKeys {
+    /// Notes the scale allows.
+    pub scale: u16,
+    /// Scale notes the person removed: drawn dark with a hairline.
+    pub removed: u16,
+    /// The current target (the sung note, or the root), if any.
+    pub target: Option<u8>,
+    /// Notes sounding right now: `glow`, over every other state.
+    pub held: u16,
+}
+
+/// Names on the keys; black keys carry both spellings on two lines.
+const KEY_LABELS: [&str; 12] = [
+    "C", "C#\nDb", "D", "D#\nEb", "E", "F", "F#\nGb", "G", "G#\nAb", "A", "A#\nBb", "B",
+];
+const BLACK_KEYS: [bool; 12] = [
+    false, true, false, true, false, false, true, false, true, false, true, false,
+];
+
+/// One octave of twelve equal keys in a `display` frame filling `rect`, showing the scale,
+/// the target and the held notes. While `enabled` is false everything, frame included, drops
+/// to `opacity-off` and still takes clicks. Returns the pitch class a click asks for: a note
+/// to toggle in [`KeyboardMode::Remove`], the new root in [`KeyboardMode::RootPick`].
+pub fn note_keyboard(
+    ui: &Ui,
+    rect: Rect,
+    keys: &KeyboardKeys,
+    mode: KeyboardMode,
+    enabled: bool,
+) -> Option<u8> {
+    let shade = |color: Color32| {
+        if enabled {
+            color
+        } else {
+            color.gamma_multiply(OPACITY_OFF)
+        }
+    };
+    let painter = ui.painter();
+    painter.rect_filled(rect, 8, shade(DISPLAY));
+    painter.rect_stroke(rect, 8, Stroke::new(1.0, shade(EDGE)), StrokeKind::Inside);
+
+    let mut clicked = None;
+    for (pc, area) in key_areas(rect).into_iter().enumerate() {
+        let bit = 1u16 << pc;
+        let black = BLACK_KEYS[pc];
+        let in_scale = keys.scale & bit != 0;
+        let removed = in_scale && keys.removed & bit != 0;
+        let clickable = match mode {
+            KeyboardMode::Remove => in_scale,
+            KeyboardMode::RootPick => true,
+        };
+
+        // The column, gaps included, takes the clicks, so there are no dead strips.
+        let column = Rect::from_x_y_ranges(area.x_range(), rect.y_range()).expand2(vec2(2.0, 0.0));
+        let response = ui.interact(
+            column,
+            ui.scope_id().with("note_key").with(pc),
+            if clickable {
+                Sense::click()
+            } else {
+                Sense::hover()
+            },
+        );
+        let response = if clickable {
+            response.on_hover_cursor(CursorIcon::PointingHand)
+        } else {
+            response
+        };
+        let is_target = keys.target == Some(pc as u8);
+        if response.clicked() && !(mode == KeyboardMode::RootPick && is_target) {
+            clicked = Some(pc as u8);
+        }
+
+        let (fill, border, halo, label) = if keys.held & bit != 0 {
+            (GLOW, None, Some(palette::glow_halo()), BACKGROUND)
+        } else if is_target {
+            (
+                ACCENT,
+                None,
+                Some(palette::accent_halo_strong()),
+                BACKGROUND,
+            )
+        } else if in_scale && !removed {
+            if black {
+                (KEY_BLACK, None, None, TEXT)
+            } else {
+                (TEXT, None, None, BACKGROUND)
+            }
+        } else if removed {
+            (DISPLAY, Some(EDGE), None, TEXT_DIM)
+        } else {
+            (DISPLAY, None, None, TEXT_DIM.gamma_multiply(0.35))
+        };
+
+        if let Some(halo) = halo {
+            painter.rect_filled(area.expand(3.0), 10, shade(halo));
+        }
+        painter.rect_filled(area, 7, shade(fill));
+        if let Some(border) = border {
+            painter.rect_stroke(area, 7, Stroke::new(1.0, shade(border)), StrokeKind::Inside);
+        }
+        painter.text(
+            pos2(area.center().x, area.bottom() - 8.0),
+            Align2::CENTER_BOTTOM,
+            KEY_LABELS[pc],
+            FontId::proportional(type_scale::CONTROL_LABEL),
+            shade(label),
+        );
+    }
+    clicked
+}
+
+/// The twelve key rectangles inside a keyboard frame: 6px in from the frame, 4px apart,
+/// black keys 10px taller than white keys at the top.
+pub fn key_areas(rect: Rect) -> [Rect; 12] {
+    let inner = rect.shrink(6.0);
+    let gap = 4.0;
+    let width = (inner.width() - 11.0 * gap) / 12.0;
+    std::array::from_fn(|pc| {
+        let top = if BLACK_KEYS[pc] {
+            inner.top()
+        } else {
+            inner.top() + 10.0
+        };
+        Rect::from_min_max(
+            pos2(inner.left() + pc as f32 * (width + gap), top),
+            pos2(
+                inner.left() + pc as f32 * (width + gap) + width,
+                inner.bottom(),
+            ),
+        )
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -632,5 +945,207 @@ mod tests {
         frame(&ctx, vec![]);
         let away = frame(&ctx, vec![egui::Event::PointerMoved(pos2(150.0, 80.0))]);
         assert_eq!(away.platform_output.cursor_icon, CursorIcon::Default);
+    }
+
+    /// Runs one frame of a 320 x 260 keyboard with `events` and returns what it reported.
+    fn keyboard_frame(
+        ctx: &egui::Context,
+        keys: &KeyboardKeys,
+        mode: KeyboardMode,
+        events: Vec<egui::Event>,
+    ) -> (Option<u8>, egui::FullOutput) {
+        let input = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(400.0, 300.0))),
+            events,
+            ..Default::default()
+        };
+        let mut clicked = None;
+        let mut output = ctx.run_ui(input, |ui| {
+            let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(320.0, 260.0));
+            clicked = note_keyboard(ui, rect, keys, mode, true);
+        });
+        output.textures_delta.clear();
+        (clicked, output)
+    }
+
+    fn click_at(pos: Pos2) -> [Vec<egui::Event>; 2] {
+        let button = |pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Default::default(),
+        };
+        [
+            vec![egui::Event::PointerMoved(pos), button(true)],
+            vec![button(false)],
+        ]
+    }
+
+    /// Clicks the middle of key `pc` and returns what the keyboard reported.
+    fn click_key(keys: &KeyboardKeys, mode: KeyboardMode, pc: usize) -> Option<u8> {
+        let ctx = egui::Context::default();
+        keyboard_frame(&ctx, keys, mode, vec![]);
+        let center = key_areas(Rect::from_min_size(Pos2::ZERO, vec2(320.0, 260.0)))[pc].center();
+        let [press, release] = click_at(center);
+        keyboard_frame(&ctx, keys, mode, press);
+        keyboard_frame(&ctx, keys, mode, release).0
+    }
+
+    const F_MINOR: KeyboardKeys = KeyboardKeys {
+        scale: 0b0101_1010_1011,
+        removed: 0,
+        target: Some(5),
+        held: 1 << 8,
+    };
+
+    #[test]
+    fn root_pick_reports_any_key_but_the_current_root() {
+        assert_eq!(click_key(&F_MINOR, KeyboardMode::RootPick, 7), Some(7));
+        // E is outside F minor and can still become the root.
+        assert_eq!(click_key(&F_MINOR, KeyboardMode::RootPick, 4), Some(4));
+        assert_eq!(click_key(&F_MINOR, KeyboardMode::RootPick, 5), None);
+    }
+
+    #[test]
+    fn remove_mode_ignores_keys_outside_the_scale() {
+        assert_eq!(click_key(&F_MINOR, KeyboardMode::Remove, 7), Some(7));
+        assert_eq!(click_key(&F_MINOR, KeyboardMode::Remove, 4), None);
+    }
+
+    #[test]
+    fn keyboard_cursor_follows_the_mode() {
+        let ctx = egui::Context::default();
+        let e_key = key_areas(Rect::from_min_size(Pos2::ZERO, vec2(320.0, 260.0)))[4].center();
+        for (mode, cursor) in [
+            (KeyboardMode::RootPick, CursorIcon::PointingHand),
+            (KeyboardMode::Remove, CursorIcon::Default),
+        ] {
+            keyboard_frame(&ctx, &F_MINOR, mode, vec![]);
+            let (_, output) =
+                keyboard_frame(&ctx, &F_MINOR, mode, vec![egui::Event::PointerMoved(e_key)]);
+            assert_eq!(output.platform_output.cursor_icon, cursor, "{mode:?}");
+        }
+    }
+
+    #[test]
+    fn key_areas_share_the_width_and_lift_black_keys() {
+        let areas = key_areas(Rect::from_min_size(pos2(32.0, 110.0), vec2(616.0, 230.0)));
+        assert_eq!(areas[0].left(), 38.0);
+        assert!((areas[11].right() - 642.0).abs() < 1e-3);
+        assert_eq!(areas[1].top(), 116.0);
+        assert_eq!(areas[0].top(), 126.0);
+        assert!(areas.iter().all(|key| key.bottom() == 334.0));
+        assert!((areas[1].left() - areas[0].right() - 4.0).abs() < 1e-3);
+    }
+
+    const OPTIONS: [&str; 9] = ["A", "B", "C", "D", "E", "F", "G", "H", "I"];
+
+    /// Runs one frame of a dropdown over x 0-300, y 0-30 and returns what it chose.
+    fn dropdown_frame(ctx: &egui::Context, events: Vec<egui::Event>) -> Option<usize> {
+        let input = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(400.0, 400.0))),
+            events,
+            ..Default::default()
+        };
+        let mut chosen = None;
+        let mut output = ctx.run_ui(input, |ui| {
+            let area = Rect::from_min_size(pos2(12.0, 0.0), vec2(276.0, 30.0));
+            chosen = dropdown_menu(ui, area, "KEY", &OPTIONS, 2);
+        });
+        output.textures_delta.clear();
+        chosen
+    }
+
+    /// Moves the pointer to `pos`, then clicks there, as a person would.
+    fn click(ctx: &egui::Context, pos: Pos2) -> Option<usize> {
+        let [press, release] = click_at(pos);
+        dropdown_frame(ctx, vec![egui::Event::PointerMoved(pos)]);
+        dropdown_frame(ctx, press);
+        dropdown_frame(ctx, release)
+    }
+
+    fn menu_is_open(ctx: &egui::Context) -> bool {
+        ctx.data(|data| data.get_temp::<egui::Id>(egui::Id::unique("btw_ui_open_dropdown")))
+            .is_some()
+    }
+
+    #[test]
+    fn dropdown_opens_chooses_and_closes() {
+        let ctx = egui::Context::default();
+        dropdown_frame(&ctx, vec![]);
+        assert_eq!(click(&ctx, pos2(100.0, 15.0)), None);
+        assert!(menu_is_open(&ctx));
+        dropdown_frame(&ctx, vec![]);
+
+        // Nine options: two columns, seven rows in the first. The menu starts 6px below the
+        // strip at the value's left edge, about 44px in after the caption; 40px into the
+        // second column is its first item ("H") whatever the caption's exact width.
+        let menu_left = 44.0;
+        let item = pos2(menu_left + MENU_COLUMN_WIDTH + 40.0, 36.0 + 4.0 + 12.0);
+        assert_eq!(click(&ctx, item), Some(7));
+        assert!(!menu_is_open(&ctx));
+    }
+
+    #[test]
+    fn a_wide_menu_stays_inside_the_strip() {
+        // A dropdown in the right half of a strip ending at x 300: its two-column menu (280px)
+        // can't start at its value, so it ends at the strip's right end instead.
+        let ctx = egui::Context::default();
+        let frame = |events| {
+            let input = egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(400.0, 400.0))),
+                events,
+                ..Default::default()
+            };
+            let mut output = ctx.run_ui(input, |ui| {
+                let area = Rect::from_min_size(pos2(160.0, 0.0), vec2(128.0, 30.0));
+                dropdown_menu(ui, area, "SCALE", &OPTIONS, 2);
+            });
+            output.textures_delta.clear();
+        };
+        let [press, release] = click_at(pos2(200.0, 15.0));
+        frame(vec![egui::Event::PointerMoved(pos2(200.0, 15.0))]);
+        frame(press);
+        frame(release);
+        frame(vec![]);
+        let menu = ctx
+            .memory(|memory| {
+                memory
+                    .areas()
+                    .visible_layer_ids()
+                    .into_iter()
+                    .filter(|layer| layer.order == egui::Order::Foreground)
+                    .find_map(|layer| memory.area_rect(layer.id))
+            })
+            .expect("menu open");
+        assert_eq!(menu.right(), 300.0);
+        assert_eq!(menu.left(), 20.0);
+    }
+
+    #[test]
+    fn dropdown_closes_without_a_change() {
+        let ctx = egui::Context::default();
+        dropdown_frame(&ctx, vec![]);
+        click(&ctx, pos2(100.0, 15.0));
+        assert!(menu_is_open(&ctx));
+        assert_eq!(click(&ctx, pos2(390.0, 390.0)), None);
+        assert!(!menu_is_open(&ctx));
+
+        click(&ctx, pos2(100.0, 15.0));
+        assert!(menu_is_open(&ctx));
+        let escape = egui::Event::Key {
+            key: egui::Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Default::default(),
+        };
+        assert_eq!(dropdown_frame(&ctx, vec![escape]), None);
+        assert!(!menu_is_open(&ctx));
+
+        // A second click on the dropdown closes it too.
+        click(&ctx, pos2(100.0, 15.0));
+        click(&ctx, pos2(100.0, 15.0));
+        assert!(!menu_is_open(&ctx));
     }
 }

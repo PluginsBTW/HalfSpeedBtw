@@ -13,6 +13,9 @@ pub const SURFACE: Color32 = Color32::from_rgb(0x11, 0x18, 0x24);
 pub const RAISED: Color32 = Color32::from_rgb(0x1a, 0x23, 0x33);
 /// Hovered or dragged control fill, and empty arc and slider tracks.
 pub const RAISED_HOVER: Color32 = Color32::from_rgb(0x22, 0x2e, 0x43);
+/// A NoteKeyboard black key while its note is in the scale: lighter than every raised fill, so
+/// lit black keys stand clear of the dark keys around them.
+pub const KEY_BLACK: Color32 = Color32::from_rgb(0x30, 0x3a, 0x4b);
 /// 1px hairlines. Decorative only: below 3:1 on `SURFACE`, so never the sole boundary cue.
 pub const EDGE: Color32 = Color32::from_rgb(0x26, 0x32, 0x47);
 /// The inset screen for live data.
@@ -93,6 +96,9 @@ mod tests {
         }
         // A selected segment's label sits on the accent fill.
         assert!(contrast(BACKGROUND, ACCENT) >= 4.5);
+        // NoteKeyboard labels: on a lit black key, and on a held (glow) key.
+        assert!(contrast(TEXT, KEY_BLACK) >= 4.5);
+        assert!(contrast(BACKGROUND, GLOW) >= 4.5);
     }
 
     #[test]
